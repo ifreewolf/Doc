@@ -1,5 +1,6 @@
 
 
+
 <div align="center">
     <img src="./image/多线程结构图.png" />
 </div>
@@ -265,9 +266,9 @@ int main(int argc, char *argv[])
 ```
 
 
-### 3. C++11线程创建的多种方式
+### 3. C++11线程创建的多种方式和参数传递
 
-#### 1). 全局函数作为线程入口
+#### 1). 普通全局函数作为线程入口
 
 <B>如何传递参数</B>
 
@@ -339,10 +340,896 @@ Drop Para
 
 <span style="background-color:red"><B>为什么是3次拷贝？</B></div>
 
+2. 传递引用和指针变量
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+
+class Para
+{
+public:
+    Para() { std::cout << "Create Para" << std::endl; }
+    Para(const Para& p) { std::cout << "Copy Para" << std::endl; this->name = p.name; }  // 拷贝构造函数
+    ~Para() { std::cout << "Drop Para " << std::endl; }
+    std::string name;
+};
+
+// 指针传递
+void ThreadMainPtr(Para* p)
+{
+    std::this_thread::sleep_for(std::chrono::milliseconds(100)); 
+    std::cout << "ThreadMainPtr: " << p->name << std::endl;
+}
+
+// 引用传递
+void ThreadMainRef(Para& p)
+{
+    std::this_thread::sleep_for(std::chrono::milliseconds(100)); 
+    std::cout << "ThreadMainPtr: " << p.name << std::endl;
+}
+
+int main(int argc, char* argv[])
+{
+    {
+        // 传递引用
+        Para p;
+        p.name = "test ref";
+        std::thread th(ThreadMainRef, std::ref(p)); // 为什么要使用std::ref()，因为这里是一个回调，系统无法确定p的类型，如果是普通函数，则可以直接使用p
+        th.join(); // 等待线程结束，主线程阻塞
+    }
+
+    getchar();
+
+    {
+        Para p;
+        p.name = "test ThreadMainPtr name";
+        std::thread th(ThreadMainPtr, &p);
+        th.join();  // 等待线程结束，主线程阻塞
+    }
+
+    return 0;
+}
+```
+
+<B>参数传递的一些坑</B>
+
+> 传递空间已经销毁
+> 多线程共享访问一块空间
+> 传递的指针变量的生命周期小于线程
+
+```cpp
+{
+    // 传递线程指针
+    Para p;
+    p.name = "test ThreadMainPtr name";
+    std::thread th(ThreadMainPtr, &p);  // 错误，线程访问的p空间会提前释放
+    th.detach();
+}
+// Para 已经释放了
+// ThreadMainPtr: �        �Vtr name // 乱码，
+```
+
+上面的例子，传递的指针变量的生命周期小于线程。
+
+运行结果如下;
+
+```bash
+Create Para
+Drop Para 
+ThreadMainPtr: P�{�Utr name
+```
+
+会出现乱码！
+
+使用成员函数作为线程入口，可以保证参数的生命周期与线程生命周期相同。
+
 
 #### 2). 成员函数作为线程入口
 
 <B>接口调用和参数传递</B>
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+
+class MyThread
+{
+public:
+    // 入口线程函数
+    void Main()
+    {
+        std::cout << "MyThread Main " << name << ":" << age << std::endl;
+    }
+    string name;
+    int age = 100;
+};
+
+int main(int argc, char* argv[])
+{
+    MyThread myth;
+    myth.name = "Test name 001";
+    myth.age = 20;
+    std::thread th(&MyThread::Main, &myth); // myth是对象地址
+    th.join();
+    return 0;
+}
+```
+
+<B>PS：</B>使用成员函数作为线程入口，`std::thread th(&MyThread::Main, &myth)`，第一个参数是类名::成员函数地址，第二个参数是对象指针。
+
+<B>线程基类封装</B>
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+
+/*
+    设计一个基类，完成线程的启动，停止，等待退出功能
+    基类中三个实现的虚函数：Start(), Stop(), Wait()
+    线程的业务，在基类函数中，用纯虚函数定义接口
+    子类继承父类，并实现业务函数：Main()
+*/
+class XThread
+{
+public:
+    virtual void Start()
+    {
+        is_exit_ = false;
+        th_ = std::thread(&XThread::Main, this);    
+    }
+    
+    // 设计一个stop函数，线程未完成强制退
+    virtual void Stop()
+    {
+        is_exit_ = true;
+        Wait();
+    }
+
+    // 必须要一个等待线程，等待线程结束，否则会有段错误：terminate called without an active exception
+    virtual void Wait()
+    {
+        if (th_.joinable()) // 可以join说明程序还未退出
+            th_.join();
+    }
+
+    bool is_exit() { return is_exit_; }
+private:
+    virtual void Main() = 0;    // 纯虚函数，派生类必须要实现
+    std::thread th_;
+    bool is_exit_ = false;
+};
+
+class TestXThread : public XThread
+{
+public:
+    void Main() override // override关键字，在编译阶段就可以检查是否父类有相应的函数，检测重写
+    {
+        std::cout << "TestXThread Main" << std::endl;
+        while (!is_exit())  // 上面已经完成业务，等待手动/延时退出
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::cout << "." << std::flush;
+        }
+    }
+    std::string name;
+};
+
+int main(int argc, char* argv[])
+{
+
+    TestXThread testTh;
+    testTh.name = "TestXThread name";
+    testTh.Start();
+    // getchar();  // 等待，手动退出线程
+    std::this_thread::sleep_for(std::chrono::seconds(1)); // 等待，手动退出线程
+    testTh.Stop();  // 线程退出
+    testTh.Wait();
+    return 0;
+}
+```
+
+<B>PS：</B> override关键字，在子类中用来标识这个函数是重写函数，在编译阶段编译器就会去检测是否父类中该虚函数。
+
+
+#### 3). lambda 临时函数作为线程入口函数
+
+> lambda 函数，其基本格式如下
+> [捕捉列表](参数) mutable -> 返回值类型 {函数体}
+
+mutable关键字: 如果需要在const成员方法中修改一个成员变量的值，那么需要将这个成员变量修饰为mutable。即用mutable修饰的成员变量不受const成员方法的限制。
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+
+
+class TestLambda
+{
+public:
+    void Start()
+    {
+        std::thread th([this]() {std::cout << "name = " << name << std::endl; });
+        th.join();
+    }
+    std::string name = "test lambda";
+};
+
+int main(int argc, char* argv[])
+{
+    std::thread th([](int i) { std::cout << "test lambda " << i << std::endl; }, 123);
+    th.join();
+
+    TestLambda test;
+    test.Start();
+
+    return 0;
+}
+```
+
+
+
+## 三. 多线程通信和同步
+
+### 3.1 多线程状态
+
+#### 3.1.1 线程状态说明
+
+- 初始化(Init)：该线程正在被创建
+- 就绪(Ready)：该线程在就绪列表中等待CPU调度。
+- 运行(Running)：该线程正在运行。
+- 阻塞(Blocked)：该线程被阻塞挂起。Blocked状态包括：pend(锁、事件、信号量等阻塞)、suspend(主动 pend)、delay(延时阻塞)、pendtime(因为锁、事件、信号量时间等超时等待)。
+- 退出(Exit)：该线程运行结束，等待父线程回收其控制块资源。
+
+<div align="cener">
+    <img src="./image/线程状态.png" />
+</div>
+
+#### 3.1.2 竞争状态(Race Condition)和临界区(Critical Section)
+
+> 竞争状态（Race Condition）
+
+多线程同时读写共享数据
+
+> 临界区
+
+读写共享数据的代码片段。
+
+避免竞争状态策略，对临界区进行保护，同时只能有一个线程进入临界区。
+
+### 3.2 互斥体和锁 mutex
+
+#### 3.2.1 互斥锁 mutex
+
+- 不用锁的情况演示
+- 期望输出一整段内容
+- lock 和 try_lock()
+- unlock()
+
+先来看一个没有互斥锁的情况：
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+#include <mutex>
+
+static std::mutex  mux;
+
+void TestThread()
+{
+    std::cout << "================================" << std::endl;
+    std::cout << "test 001" << std::endl;
+    std::cout << "test 002" << std::endl;
+    std::cout << "================================" << std::endl;
+    mux.unlock();
+}
+
+
+int main(int argc, char* argv[])
+{
+    // 开 10 个线程，运行上面函数
+    for (int i = 0; i < 10; ++i)
+    {
+        std::thread th(TestThread);
+        th.detach();
+    }
+
+    return 0;
+}
+```
+
+运行结果如下所示：
+
+```bash
+================================================================
+test 001
+test 002
+================================
+
+test 001
+test 002
+================================
+================================================================
+================================test 001
+test 002
+
+================================
+test 001
+test 002
+================================
+
+test 001
+test 002
+================================
+================================
+test 001
+test 002
+================================================================
+================================test 001
+================================
+test 001
+
+test 002
+================================
+
+test 001
+test 002
+================================
+test 002
+================================
+test 001
+test 002
+================================
+================================
+```
+
+线程函数中的输出存在不能完整输出的情况，因为此时有10个线程在竞争这些资源。
+
+加上互斥锁的情况：
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+#include <mutex>
+
+static std::mutex  mux;
+
+void TestThread()
+{
+
+    // 获取锁资源，如果没有则阻塞等待，lock()保护的代码块就是临界区
+    // 尽管申请，尽早释放，临界区越小越好
+    mux.lock(); // 一旦有资源，进入就绪状态，等待cpu调度
+    std::cout << "================================" << std::endl;
+    std::cout << "test 001" << std::endl;
+    std::cout << "test 002" << std::endl;
+    std::cout << "test 003" << std::endl;
+    std::cout << "================================" << std::endl;
+    mux.unlock();
+}
+
+
+int main(int argc, char* argv[])
+{
+    // 开 10 个线程，运行上面函数
+    for (int i = 0; i < 10; ++i)
+    {
+        std::thread th(TestThread);
+        th.detach();
+    }
+
+    getchar();
+
+    return 0;
+}
+```
+
+运行结果如下：
+
+```bash
+================================
+test 001
+test 002
+test 003
+================================
+================================
+test 001
+test 002
+test 003
+================================
+================================
+test 001
+test 002
+test 003
+================================
+================================
+test 001
+test 002
+test 003
+================================
+================================
+test 001
+test 002
+test 003
+================================
+================================
+test 001
+test 002
+test 003
+================================
+================================
+test 001
+test 002
+test 003
+================================
+================================
+test 001
+test 002
+test 003
+================================
+================================
+test 001
+test 002
+test 003
+================================
+================================
+test 001
+test 002
+test 003
+================================
+```
+
+lock()函数保护的代码块就是临界区，每个线程访问时都会去尝试拿互斥锁，拿到后才能运行临界区的代码，否则线程进入阻塞状态，继续等待资源。
+
+再看看try_lock()的情况：
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+#include <mutex>
+
+static std::mutex  mux;
+
+void TestThread()
+{
+    for(;;)
+    {
+        // 获取锁资源，如果没有则阻塞等待，lock()保护的代码块就是临界区
+        // 尽晚申请，尽早释放，临界区越小越好
+        // mux.lock(); // 一旦有资源，进入就绪状态，等待cpu调度
+        // lock()在没获取到资源的时候，就会退出，没有资源消耗。
+        // try_lock() 会有资源消耗，所以try_lock()之后必须得等待一段时间，不然会把资源消耗完。
+        // try_lock() 的优势，尝试去锁，如果没有获取到锁，也可以做一些操作，比如：休眠、刷新页面等。
+        if (!mux.try_lock())
+        {
+            std::cout << "." << std::flush;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+        std::cout << "================================" << std::endl;
+        std::cout << "test 001" << std::endl;
+        std::cout << "test 002" << std::endl;
+        std::cout << "test 003" << std::endl;
+        std::cout << "================================" << std::endl;
+        mux.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));    // 睡眠一会儿，防止资源被消耗完。
+    }
+}
+
+
+int main(int argc, char* argv[])
+{
+    // 开 10 个线程，运行上面函数
+    for (int i = 0; i < 10; ++i)
+    {
+        std::thread th(TestThread);
+        th.detach();
+    }
+
+    getchar();
+
+    return 0;
+}
+```
+
+10个线程都进入for循环里面，10个线程同时竞争互斥锁。使用try_lock()去尝试获取锁，如果没有获取到锁，则进行休眠100ms，相当于间隔100ms尝试获取一次锁，不需要太频繁的去获取锁。同时try_lock()相比lock()会有资源消耗，所以需要休眠100ms，否则容易将资源消耗完。
+
+
+#### 3.2.2 互斥锁的坑_线程抢占不到资源
+
+上面例子中，理论上：1个线程抢占了资源，其他9个线程都在等待。等这个线程运行完之后释放锁，其他9个线程的其中一个可以获取到锁，进入就绪状态等待CPU调度。
+
+但现实中，有可能出现，1个线程抢占了资源，另外9个线程都在等待。这个线程执行完释放锁后，又再次获取到锁了，又继续运行，从而可能出现只有一个线程在运行，其他9个线程一直在等待。
+
+代码如下：
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+#include <mutex>
+
+static std::mutex  mux;
+
+void ThreadMainMux(int i)
+{
+    for(;;)
+    {
+        mux.lock();
+        std::cout << i << "[in]" << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        mux.unlock();
+    }
+}
+
+int main(int argc, char* argv[])
+{
+    for (int i = 0; i < 3; ++i)
+    {
+        std::thread th(ThreadMainMux, i+1);
+        th.detach();
+    }
+
+    getchar();
+
+    return 0;
+}
+```
+
+运行结果，如下所示：
+
+```bash
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+1[in]
+```
+
+在这个运行过程中，始终只有一个线程能获取得到互斥锁。线程1在unlock()之后又进入了lock()并获得了资源。
+
+改进方式：
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+#include <mutex>
+
+static std::mutex  mux;
+
+void TestThread()
+{
+    for(;;)
+    {
+        // 获取锁资源，如果没有则阻塞等待，lock()保护的代码块就是临界区
+        // 尽晚申请，尽早释放，临界区越小越好
+        // mux.lock(); // 一旦有资源，进入就绪状态，等待cpu调度
+        // lock()在没获取到资源的时候，就会退出，没有资源消耗。
+        // try_lock() 会有资源消耗，所以try_lock()之后必须得等待一段时间，不然会把资源消耗完。
+        // try_lock() 的优势，尝试去锁，如果没有获取到锁，也可以做一些操作，比如：休眠、刷新页面等。
+        if (!mux.try_lock())
+        {
+            std::cout << "." << std::flush;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+        std::cout << "================================" << std::endl;
+        std::cout << "test 001" << std::endl;
+        std::cout << "test 002" << std::endl;
+        std::cout << "test 003" << std::endl;
+        std::cout << "================================" << std::endl;
+        mux.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));    // 睡眠一会儿，防止资源被消耗完。
+    }
+}
+
+void ThreadMainMux(int i)
+{
+    for(;;)
+    {
+        mux.lock();
+        std::cout << i << "[in]" << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        mux.unlock();
+        // unlock() 之后，一定要留一部分时间，给系统处理时间。让当前线程还来不及去抢占互斥锁，给其他线程更多的机会能获取到互斥锁。
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+```
+
+ unlock() 之后，留一部分时间，给系统处理时间。让当前线程还来不及去抢占互斥锁，给其他线程更多的机会能获取到互斥锁。
+
+
+ #### 3.2.3 超时锁应用 timed_mutex(避免长时间死锁)
+
+ - 可以记录锁获取情况，多次超时，可以记录日志，获取错误情况。
+
+ 隔一段时间去尝试获取一下锁，长时间抢占失败后，记录日志。
+
+ try_lock() + sleep(), 在C++17之后，有一个函数：`try_lock_for(milliseconds(1000))`可以完成这两个操作。
+
+ ```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+#include <mutex>
+
+std::timed_mutex tmux;
+void ThreadMainTime(int i)
+{
+    for (;;)
+    {
+        if (tmux.try_lock_for(std::chrono::milliseconds(5000)))
+        {
+            std::cout << i << "[try_lock_for timeout]" << std::endl;
+            continue;
+        }
+        std::cout << i << "[in]" << std::endl;
+        tmux.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+int main(int argc, char* argv[])
+{
+    for (int i = 0; i < 3; ++i)
+    {
+        std::thread th(ThreadMainTime, i+1);
+        th.detach();
+    }
+    getchar();
+
+    return 0;
+}
+ ```
+
+
+
+#### 3.2.4 递归锁(可重入)recursive_mutex和recursive_timed_mutex用于业务组合
+
+- 同一个线程中的同一把锁可以锁多次，避免了一些不必要的死锁；
+- 组合业务 用到同一个锁
+
+正常情况下，一个互斥锁只能lock()一次。
+调用多次lock()时，会出现阻塞等待锁的情况；递归锁可进行多次lock()，每次lock()，计数器+1，一个lock() 对应一个unlock()。
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+#include <mutex>
+
+std::recursive_mutex rmux;
+void Task1()
+{
+    rmux.lock();
+    std::cout << "task1 [in]" << std::endl;
+    rmux.unlock();
+}
+
+void Task2()
+{
+    rmux.lock();
+    std::cout << "task2 [in]" << std::endl;
+    rmux.unlock();
+}
+
+void ThreadMainRec(int i)
+{
+    for (;;)
+    {
+        // 在这个业务流程中，希望Task1()和Task2()以及中间的业务一起执行。如果是互斥锁，则要求Task1()在获取互斥锁之前必须先被释放。
+        // 在释放后，就会存在一个问题：在释放时可能会被其他线程抢占资源，从而导致Task1()、Task2()以及中间的业务不能一块执行。
+        rmux.lock();
+        // rmux.unlock();  // 如果是互斥锁，在这里要执行unlocck()，否则Task1()里面将进入死锁。
+        Task1();    // 在Task1()里面又进行了一次lock()，相当于可重入锁。
+        std::cout << i << "[in]" << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(2));   // 延迟 2 s
+        Task2();
+        rmux.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+int main(int argc, char* argv[])
+{
+    for (int i = 0; i < 3; ++i)
+    {
+        std::thread th(ThreadMainRec, i+1);
+        th.detach();
+    }
+    getchar();
+
+    return 0;
+}
+```
+
+> 在这个业务流程中，希望Task1()和Task2()以及中间的业务一起执行。如果是互斥锁，则要求Task1()在获取互斥锁之前必须先被释放。
+> 
+> 在释放后，就会存在一个问题：在释放时可能会被其他线程抢占资源，从而导致Task1()、Task2()以及中间的业务不能一块执行。
+
+#### 3.2.5 共享锁 shared_mutex
+
+- c++14 共享超时互斥锁 shared_timed_mutex
+- c++17 共享互斥 shared_mutex
+- 如果只有写时需要互斥，读取时不需要，用普通的锁的话如何做？
+- 按照如下代码，读取只有一个线程进入，在很多业务场景中，没有充分利用 cpu 资源。
+
+使用场景：
+    一个线程要读资源，一个线程要写入资源；多个线程读资源的时候，可同时读取资源，但是多个线程写入资源就会存在问题。
+
+    只要有一个线程在写，则其他所有的线程不能读也不能写；
+    相反，有一个线程在读，则其他所有线程可以读，但都不能写；一定要等所有线程读完才能写。
+
+<div align="center">
+    <img src="./image/共享锁.png" />
+</div>
+
+示例：
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+#include <mutex>
+#include <shared_mutex>
+
+std::shared_timed_mutex stmux;
+
+void ThreadRead(int i)
+{
+    for (;;)
+    {
+        stmux.lock_shared();
+        std::cout << i << " Read" << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        stmux.unlock_shared();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+void ThreadWrite(int i)
+{
+    for (;;)
+    {
+        stmux.lock_shared();
+        // 读取数据
+        stmux.unlock_shared();
+        stmux.lock();   // 互斥锁 写入
+        std::cout << i << " Write" << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        stmux.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+    }
+}
+
+int main(int argc, char* argv[])
+{
+    for (int i = 0; i < 3; ++i)
+    {
+        std::thread th(ThreadWrite, i+1);
+        th.detach();
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        std::thread th(ThreadRead, i+1);
+        th.detach();
+    }
+    
+    getchar();
+    return 0;
+}
+```
+
+可以发现，shared_time_mutex中既有共享锁(lock_shared()，unlock_shared())也有互斥锁(stmux.lock(), unlock())。在读写共享内存业务时，可以利用共享锁。
+
+### 3.3 利用栈特性自动释放锁 RAII
+
+#### 3.3.1 什么是RAII，手动代码实现
+
+> RAII(Resource Acquisition Is Initialization) C++之父Bjarne Stroustrup提出；使用局部对象来管理资源的技术称之为资源获取即初始化；它的生命周期是由操作系统来管理的，无需人工介入；资源的销毁容易忘记，造成死锁或内存泄漏。
+
+<B>手动实现RAII管理mutex资源</B>
+
+
+#### 3.3.2 C++11支持的RAII管理互斥锁资源 lock_guard
+
+- c++11 实现严格基于作用域的互斥体所有权包装器；
+- adopt_lock C++11类型为adopt_lock_t，假设调用方已拥有互斥的所有权；
+- 通过{}控制锁的临界区
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+#include <mutex>
+#include <shared_mutex>
+
+// RAII
+class XMutex
+{
+public:
+    XMutex(std::mutex &mux) : mux_(mux)
+    {
+        std::cout << "Lock" << std::endl;
+        mux.lock();
+    }
+    ~XMutex()
+    {
+        std::cout << "Unlock" << std::endl;
+    }
+private:
+    std::mutex& mux_;// 应用在初始化的时候就需要赋值
+};
+
+static std::mutex mux;
+void TestMutex(int status)
+{
+    // 这个锁被传入XMutex对象中，并且在构造函数中被lock(),因此其他任意对象函数都无法再获取该锁。只有XMutex生命周期结束，其他对象和函数才有可能获取到该锁。
+    // 局部对象来管理资源。
+    XMutex lock(mux);
+    if (status == 1)
+    {
+        std::cout << "=1" << std::endl;
+        return;
+    }
+    else
+    {
+        std::cout << "!=1" << std::endl;
+        return;
+    }
+}
+
+int main(int argc, char* argv[])
+{
+    TestMutex(1);
+    TestMutex(2);
+    
+    getchar();
+    return 0;
+}
+```
+
+#### 3.3.3 unique_lock c++11
+
+- unique_lock C++11 实现可移动的互斥体所有权包装器
+- 支持临时释放锁 unlock
+- 支持 adopt_lock（已经拥有锁，不加锁，出栈区会释放）
+- 支持 defer_lock（延后拥有，不加锁，出栈区不释放）
+- 支持 try_to_lock 尝试获得互斥的所有权而不阻塞，获取失败退出栈区不会释放，通过 owns_lock() 函数判断
+- 支持超时参数，超时不拥有锁。
+
+#### 3.3.4 shared_lock c++14
 
 
 

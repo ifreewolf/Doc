@@ -62,8 +62,6 @@ int main(int argc, char* argv[])
 
     getchar();
 
-
-
     std::thread th;
     {
         float f2 = 12.1f;
