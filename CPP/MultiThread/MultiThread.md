@@ -1220,6 +1220,58 @@ int main(int argc, char* argv[])
 }
 ```
 
+上述代码中，展示的是C++11中lock_guard的实现，通过局部对象来管理资源。
+
+下面看看lock_guard的使用：
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+#include <mutex>
+#include <shared_mutex>
+
+static std::mutex gmutex;
+void TestLockGuard(int i)
+{
+    gmutex.lock();
+    {
+        // std::lock_guard<std::mutex> lock(gmutex);    // 会报错，因为锁已经在外面被占用了
+        // 已经拥有锁，不会lock()
+        std::lock_guard<std::mutex> lock(gmutex, std::adopt_lock);
+        // 结束释放锁
+    }
+
+    {   // 这个锁只作用于当前作用域
+        std::lock_guard<std::mutex> lock(gmutex);
+        std::cout << "begin thread " << i << std::endl;
+    }
+    for (;;)
+    {
+        {// 这个锁只作用于当前作用域
+            std::lock_guard<std::mutex> lock(gmutex);
+            std::cout << "In " << i << std::endl;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    // lock_guard可以避免频繁的lock和unlock，同时可以更好的控制临界区
+}
+
+int main(int argc, char* argv[])
+{
+    for (int i = 0; i < 3; i++) {
+        std::thread th(TestLockGuard, i+1);
+        th.detach();
+    }
+    getchar();
+
+    return 0;
+}
+```
+
+lock_guard可以实现使用局部变量控制临界区，局部变量的作用域就是临界区的范围。同时，`std::lock_guard<std::mutex> lock(gmutex, std::adopt_lock);`可以实现如果已经拥有锁，不会lock()，并且在结束后会释放锁。
+
+
 #### 3.3.3 unique_lock c++11
 
 - unique_lock C++11 实现可移动的互斥体所有权包装器
@@ -1229,8 +1281,114 @@ int main(int argc, char* argv[])
 - 支持 try_to_lock 尝试获得互斥的所有权而不阻塞，获取失败退出栈区不会释放，通过 owns_lock() 函数判断
 - 支持超时参数，超时不拥有锁。
 
+
+unique_lock示例：
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+#include <mutex>
+#include <shared_mutex>
+
+int main(int argc, char* argv[])
+{
+
+    {
+        static std::mutex mux;
+        {
+            std::unique_lock<std::mutex> lock(mux);
+            lock.unlock();
+            // 临时释放锁
+            lock.lock();
+        }
+
+        {   // std::adopt_lock
+            // 已经拥有锁，不锁定，退出解锁
+            mux.lock();
+            std::unique_lock<std::mutex> lock(mux, std::adopt_lock);    // std::adopt_lock：已经拥有锁，则不上锁，退出时会释放锁
+        }
+
+        {   // std::defer_lock
+            // 延后加锁，不拥有，退出不解锁
+            std::unique_lock<std::mutex> lock(mux, std::defer_lock);
+            lock.lock();
+            // 适用场景：
+            //      本次处理完之后，要加锁
+        }
+
+        {   // std::try_to_lock
+            // mux.lock(); // not owns_lock
+            // 尝试加锁 不阻塞 失败不拥有锁
+            std::unique_lock<std::mutex> lock(mux, std::try_to_lock);
+            if(lock.owns_lock())
+            {
+                std::cout << "owns_lock" << std::endl;
+            }
+            else
+            {
+                std::cout << "not owns_lock" << std::endl;
+            }
+        }
+    }
+    getchar();
+
+    return 0;
+}
+```
+
 #### 3.3.4 shared_lock c++14
 
+shared_lock C++14 实现可移动的共享互斥体所有权封装器
+```cpp
+explicit shared_lock(mutex_type& m) : _Pmtx(_STD addressof(_Mtx)), _Owns(true) {
+    _Mtx.lock_shared(); // 最终还是调用了共享锁
+}
+```
+
+使用示例：
+
+```cpp
+int main(int argc, char* argv[])
+{
+    {
+        // 共享锁
+        static std::shared_timed_mutex tmux;
+        // 读取锁 共享锁
+        {
+            // 调用共享锁
+            std::shared_lock<std::shared_timed_mutex> lock(tmux);
+            std::cout << "read data" << std::endl;
+            // 退出栈区 释放共享锁
+        }
+        // 写入锁 互斥锁
+        {
+            std::unique_lock<std::shared_timed_mutex> lock(tmux);
+            std::cout << "write data" << std::endl;
+        }
+    }
+    getchar();
+}
+```
+
+上面代码中，`std::shared_lock<std::shared_timed_mutex> lock(tmux);`是调用了共享锁，而`std::unique_lock<std::shared_timed_mutex> lock(tmux);`是调用了互斥锁。
+
+为什么要用这个包装器？与`std::shared_timed_mutex`相比，就是不需要手动lock和unlock，这部分内容的目的就是使用包装器来代替原来的互斥锁等，代替手动加锁和释放锁的过程。
+
+
+#### 3.3.5 scoped_lock c++17
+
+```cpp
+scoped_lock C++17 用于多个互斥体的免死锁 RAII 封装 类似 lock
+
+explicit scoped_lock(_Mutexes&... __Mtxes) : _MyMutexes(_Mtxes...) { // construct and lock
+    _STD lock(_Mtxes...);
+}
+
+lock(mux1, mux2);
+mutex mux1, mux2;
+std::scoped_lock lock(mux1, mux2);
+```
 
 
 

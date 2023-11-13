@@ -4,6 +4,7 @@
 #include <mutex>
 #include <shared_mutex>
 
+// lock_guard的实现原理
 // RAII
 class XMutex
 {
@@ -39,8 +40,98 @@ void TestMutex(int status)
     }
 }
 
+
+static std::mutex gmutex;
+void TestLockGuard(int i)
+{
+    gmutex.lock();
+    {
+        // std::lock_guard<std::mutex> lock(gmutex);    // 会报错，因为锁已经在外面被占用了
+        // 已经拥有锁，不会lock()
+        std::lock_guard<std::mutex> lock(gmutex, std::adopt_lock);
+        // 结束释放锁
+    }
+
+    {   // 这个锁只作用于当前作用域
+        std::lock_guard<std::mutex> lock(gmutex);
+        std::cout << "begin thread " << i << std::endl;
+    }
+    for (;;)
+    {
+        {// 这个锁只作用于当前作用域
+            std::lock_guard<std::mutex> lock(gmutex);
+            std::cout << "In " << i << std::endl;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    // lock_guard可以避免频繁的lock和unlock，同时可以更好的控制临界区
+}
+
 int main(int argc, char* argv[])
 {
+    {
+        // 共享锁
+        static std::shared_timed_mutex tmux;
+        // 读取锁 共享锁
+        {
+            // 调用共享锁
+            std::shared_lock<std::shared_timed_mutex> lock(tmux);
+            std::cout << "read data" << std::endl;
+            // 退出栈区 释放共享锁
+        }
+        // 写入锁 互斥锁
+        {
+            std::unique_lock<std::shared_timed_mutex> lock(tmux);
+            std::cout << "write data" << std::endl;
+        }
+    }
+    getchar();
+
+    {
+        static std::mutex mux;
+        {
+            std::unique_lock<std::mutex> lock(mux);
+            lock.unlock();
+            // 临时释放锁
+            lock.lock();
+        }
+
+        {   // std::adopt_lock
+            // 已经拥有锁，不锁定，退出解锁
+            mux.lock();
+            std::unique_lock<std::mutex> lock(mux, std::adopt_lock);    // std::adopt_lock：已经拥有锁，则不上锁，退出时会释放锁
+        }
+
+        {   // std::defer_lock
+            // 延后加锁，不拥有，退出不解锁
+            std::unique_lock<std::mutex> lock(mux, std::defer_lock);
+            lock.lock();
+            // 适用场景：
+            //      本次处理完之后，要加锁。
+        }
+
+        {   // std::try_to_lock
+            // mux.lock(); // not owns_lock
+            // 尝试加锁 不阻塞 失败不拥有锁
+            std::unique_lock<std::mutex> lock(mux, std::try_to_lock);
+            if(lock.owns_lock())
+            {
+                std::cout << "4owns_lock" << std::endl;
+            }
+            else
+            {
+                std::cout << "4not owns_lock" << std::endl;
+            }
+        }
+    }
+    getchar();
+
+    for (int i = 0; i < 3; i++) {
+        std::thread th(TestLockGuard, i+1);
+        th.detach();
+    }
+    getchar();
+
     TestMutex(1);
     TestMutex(2);
     
