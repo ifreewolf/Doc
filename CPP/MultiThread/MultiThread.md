@@ -1971,5 +1971,59 @@ void XMsgServer::Stop()     // 重写父类Stop()方法，添加了cv_.notify_al
 - 代码演示
 
 ```cpp
+#include <thread>
+#include <iostream>
+#include <future>
+#include <string>
 
+void TestFuture(std::promise<std::string> p)
+{
+    std::cout << "begin TestFuture" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+    std::cout << "begin set value" << std::endl;
+    p.set_value("TestFuture value");
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+    std::cout << "end TestFuture" << std::endl;
+}
+
+int main(int argc, char* argv[])
+{
+    // 异步传输变量存储
+    std::promise<std::string> p;
+    // 用来获取线程异步
+    auto future = p.get_future();
+
+    auto th = std::thread(TestFuture, std::move(p));   // std::move()之后，p会被移动到TestFuture()函数中，同时main中的p会被销毁。
+
+    std::cout << "begin future.get()" << std::endl;
+    std::cout << "future get() = " << future.get() << std::endl;
+    std::cout << "end future.get()" << std::endl;
+    th.join();
+
+    getchar();
+    return 0;
+}
 ```
+
+运行结果如下：
+
+```bash
+begin future.get()  # main()函数等待获取值
+begin TestFuture    # TestFuture() 函数的进入
+begin set value     # TestFuture()函数设置值
+future get() = TestFuture value # main()已经在等待获取值，在TestFuture()函数中设置值之后，main()函数立马获取值
+end future.get()
+end TestFuture
+```
+
+总结：
+
+> Promise创建的对象里面包含一个Future对象和一个变量，可以通过get_future()获取Future对象；
+> Promise对象可以异步对变量进行赋值，同时Future对象可以调用get()方法异步获取Promise设置的变量的值，一旦Promise赋值完成，Future的get()方法即可获取值。
+> 这里Promise对象对变量只可赋值一次。
+
+<B>PS：</B>std::move()之后，p会被移动到TestFuture()函数中，同时main中的p会被销毁
+
+
+#### 3.5.2 packaged_task 异步调用函数打包
+
