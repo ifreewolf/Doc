@@ -67,9 +67,57 @@ void TestLockGuard(int i)
     // lock_guard可以避免频繁的lock和unlock，同时可以更好的控制临界区
 }
 
+
+static std::mutex mux1;
+static std::mutex mux2;
+void TestScope1()
+{
+    // 模拟死锁 停 100ms 等另一个线程锁mux2
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::cout << std::this_thread::get_id() << " begin mux1 locck" << std::endl;
+    // mux1.lock();
+    std::cout << std::this_thread::get_id() << " begin mux2 locck" << std::endl;
+    // mux2.lock();
+    // C++11
+    std::lock(mux1, mux2);
+    // C++17
+    // std::scoped_lock lock(mux1, mux2);  // 解决死锁
+    std::cout << std::this_thread::get_id() << " TestScope1" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    mux2.unlock();
+    mux1.unlock();
+}
+
+void TestScope2()
+{
+    std::cout << std::this_thread::get_id() << " begin mux2 locck" << std::endl;
+    mux2.lock();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::cout << std::this_thread::get_id() << " begin mux1 locck" << std::endl;
+    mux1.lock();
+    std::cout << std::this_thread::get_id() << " TestScope2" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    mux1.unlock();
+    mux2.unlock();
+}
+
 int main(int argc, char* argv[])
 {
     {
+        // 演示死锁情况
+        {
+            std::thread th(TestScope1);
+            th.detach();
+        }
+        {
+            std::thread th(TestScope2);
+            th.detach();
+        }
+    }
+
+    getchar();
+
+    {   // 封装器
         // 共享锁
         static std::shared_timed_mutex tmux;
         // 读取锁 共享锁
@@ -105,7 +153,7 @@ int main(int argc, char* argv[])
         {   // std::defer_lock
             // 延后加锁，不拥有，退出不解锁
             std::unique_lock<std::mutex> lock(mux, std::defer_lock);
-            lock.lock();
+            lock.lock();    // 主动lock
             // 适用场景：
             //      本次处理完之后，要加锁。
         }

@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.5)
+project(111thread_msg_server_condition)
+
+set(CMAKE_CXX_STANDARD 14)
+
+include_directories(
+    ./include/
+)
+
+find_package(Threads REQUIRED)
+
+add_executable(${PROJECT_NAME} 
+    111thread_msg_server_condition.cpp
+    ./src/xthread.cpp
+    ./src/xmsg_server.cpp
+)
+
+target_link_libraries(${PROJECT_NAME} Threads::Threads)

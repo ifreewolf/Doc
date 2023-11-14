@@ -1274,6 +1274,8 @@ lock_guard可以实现使用局部变量控制临界区，局部变量的作用�
 
 #### 3.3.3 unique_lock c++11
 
+需求：把一个锁赋给另一个锁；或者，临时释放锁。
+
 - unique_lock C++11 实现可移动的互斥体所有权包装器
 - 支持临时释放锁 unlock
 - 支持 adopt_lock（已经拥有锁，不加锁，出栈区会释放）
@@ -1390,7 +1392,584 @@ mutex mux1, mux2;
 std::scoped_lock lock(mux1, mux2);
 ```
 
+示例如下：
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+#include <mutex>
+#include <shared_mutex>
+
+static std::mutex mux1;
+static std::mutex mux2;
+void TestScope1()
+{
+    // 模拟死锁 停 100ms 等另一个线程锁mux2
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::cout << std::this_thread::get_id() << " begin mux1 locck" << std::endl;
+    mux1.lock();
+    std::cout << std::this_thread::get_id() << " begin mux2 locck" << std::endl;
+    mux2.lock();
+    std::cout << std::this_thread::get_id() << " TestScope1" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    mux2.unlock();
+    mux1.unlock();
+}
+
+void TestScope2()
+{
+    std::cout << std::this_thread::get_id() << " begin mux2 locck" << std::endl;
+    mux2.lock();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::cout << std::this_thread::get_id() << " begin mux1 locck" << std::endl;
+    mux1.lock();
+    std::cout << std::this_thread::get_id() << " TestScope2" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    mux1.unlock();
+    mux2.unlock();
+}
+
+int main(int argc, char* argv[])
+{
+    {
+        // 演示死锁情况
+        {
+            std::thread th(TestScope1);
+            th.detach();
+        }
+        {
+            std::thread th(TestScope2);
+            th.detach();
+        }
+    }
+
+    getchar();
+
+    return 0;
+}
+```
+
+上面代码运行结果如下：
+
+```cpp
+140548214396672 begin mux2 lock
+140548222789376 begin mux1 lock
+140548222789376 begin mux2 lock
+140548214396672 begin mux1 lock
+```
+
+可以看到，TestScope1()获得了锁mux2，而TestScope2()获得了锁mux1。随后，两个线程进入了死锁，TestScope1()尝试获取锁mux1，被TestScope2()占用了，进入阻塞；此时，TestScope2()也在尝试获取mux2，但mux2被TestScope1()占用且进入阻塞，从而两个线程都陷入死锁。
+
+<B>C++11 解决方案：std::lock()</B>
+
+在这个例子中只修改TestScope1()函数：
+
+```cpp
+void TestScope1()
+{
+    // 模拟死锁 停 100ms 等另一个线程锁mux2
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::cout << std::this_thread::get_id() << " begin mux1 locck" << std::endl;
+    std::cout << std::this_thread::get_id() << " begin mux2 locck" << std::endl;
+    // C++11
+    std::lock(mux1, mux2);
+    std::cout << std::this_thread::get_id() << " TestScope1" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    mux2.unlock();
+    mux1.unlock();
+}
+```
+
+> 原理是同时获取mux1和mux2，只要有一个没有获取得到就进入阻塞等待锁。
+> 为什么不考虑使用mux1.lock()和mux2.lock()来尝试同时获取锁呢？因为在整个程序运行过程中，两条语句，无法保证同时得到两个锁，有可能在获取mux1的时候，mux2被其他程序占用了。
+
+运行结果如下：
+
+```bash
+140271406233344 begin mux2 locck
+140271414626048 begin mux1 locck
+140271414626048 begin mux2 locck
+140271406233344 begin mux1 locck
+140271406233344 TestScope2
+140271414626048 TestScope1
+```
+
+<B>C++17 解决方案：std::lock()</B>
+
+```cpp
+void TestScope1()
+{
+    // 模拟死锁 停 100ms 等另一个线程锁mux2
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::cout << std::this_thread::get_id() << " begin mux1 locck" << std::endl;
+    std::cout << std::this_thread::get_id() << " begin mux2 locck" << std::endl;
+    // C++11
+    // std::lock(mux1, mux2);
+    // C++17
+    std::scoped_lock lock(mux1, mux2);  // 解决死锁
+    std::cout << std::this_thread::get_id() << " TestScope1" << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    mux2.unlock();
+    mux1.unlock();
+}
+```
+
+可以得到与C++11 std::lock()一样的结果。
 
 
+#### 3.3.6 使用互斥锁+list模拟线程通信
+
+- 封装线程基类XThread控制线程启动和停止
+- 模拟消息服务器线程接收字符串消息，并模拟处理
+- 通过unique_lock和mutex互斥访问list<string>消息队列
+- 主线程定时发送消息给子线程
 
 
+<B> 1) 基类XThread头文件和源文件如下所示：`xthread.h xthread.cpp`</B>
+
+```cpp
+// 头文件
+
+#ifndef XTHREAD_H_
+#define XTHREAD_H_
+
+#include <thread>
+class XThread
+{
+public:
+    // 启动线程
+    virtual void Start();
+    // 设置线程退出标志 并等待
+    virtual void Stop();
+    // 等待线程退出(阻塞)
+    virtual void Wait();
+    // 线程是否退出
+    bool is_exit();
+private:
+    // 线程入口
+    virtual void Main() = 0;
+    bool is_exit_ = false;
+    std::thread th_;
+};
+
+#endif
+
+// 源文件
+#include "xthread.h"
+
+void XThread::Start()
+{
+    is_exit_ = false;
+    th_ = std::thread(&XThread::Main, this);
+}
+
+
+void XThread::Stop()
+{
+    is_exit_ = true;
+    Wait();
+}
+
+
+void XThread::Wait()
+{
+    if (th_.joinable())
+        th_.join();
+    
+}
+
+
+bool XThread::is_exit()
+{
+    return is_exit_;
+}
+```
+
+
+<B>消息服务器线程</B>
+
+- 模拟消息服务器线程接收字符串消息，并模拟处理
+- 通过unique_lock和mutex互斥访问list<string>消息队列
+
+xmsg_server头文件和源文件如下：`xmsg_server.h xmsg_server.cpp`
+
+```cpp
+// 头文件
+#ifndef XMSGSERVER_H_
+#define XMSGSERVER_H_
+
+#include "xthread.h"
+#include <string>
+#include <list>
+#include <mutex>
+
+class XMsgServer : public XThread
+{
+public:
+    // 给当前线程发消息
+    void SendMsg(std::string msg);
+private:
+    // 处理消息的线程入口函数
+    void  Main() override;
+
+    // 消息队列缓冲
+    std::list<std::string> msgs_;
+
+    // 互斥访问消息队列
+    std::mutex mux_;
+
+};
+
+#endif
+
+// 源文件
+#include "xmsg_server.h"
+#include <iostream>
+
+// 给当前线程发消息
+void XMsgServer::SendMsg(std::string msg)
+{
+    std::unique_lock<std::mutex> lock(mux_);    // 确保单线程访问
+    msgs_.push_back(msg);
+}
+
+
+// 处理消息的线程入口函数
+void  XMsgServer::Main()
+{
+    while (!is_exit())  // 循环处理
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10)); // 消息延迟处理
+        std::unique_lock<std::mutex> lock(mux_); // 每次循环都会释放锁
+        if (msgs_.empty()) {
+            continue;
+        }
+
+        while (!msgs_.empty()) {
+            // 消息处理业务逻辑
+            std::cout << "recv: " << msgs_.front() << std::endl;
+            msgs_.pop_front();
+        }
+
+    }
+}
+```
+
+<B>主线程定时发送消息给子线程</B>
+
+109thread_msg_server.cpp 文件如下：
+
+```cpp
+#include "xmsg_server.h"
+#include <sstream>
+
+int main(int argc, char* argv[])
+{
+    XMsgServer server;
+    server.Start();
+    for (int i = 0; i < 10; i++)
+    {
+        std::stringstream ss;
+        ss << " msg : " << i + 1;
+        server.SendMsg(ss.str());
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));    // 定时发送
+    }
+    server.Stop();
+
+    return 0;
+}
+```
+
+
+### 3.4 条件变量
+
+#### 3.4.1 condition_variable
+
+<B>生产者-消费者模型</B>
+
+- 生产者和消费者共享资源变量（list队列）
+- 生产者生产一个产品，通知消费者消费
+- 消费者阻塞等待信号-获取信号后消费产品（取出list队列中数据）
+
+如果不发送通知，则需要程序一直在循环等待，会产生资源消耗(增加开销、增加时延)。通知的方式可以在发送通知后进行处理，没有通知的时候进入阻塞状态。
+
+
+示例：
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <mutex>
+#include <list>
+#include <string>
+#include <sstream>
+#include <condition_variable>
+
+std::list<std::string> msgs_;
+std::mutex mux;
+std::condition_variable cv;
+
+void ThreadWrite()
+{
+    for (int i = 0; ; i++)
+    {
+        std::stringstream ss;
+        ss << "Write msg " << i;
+        std::unique_lock<std::mutex> lock(mux);
+        msgs_.push_back(ss.str());
+        lock.unlock();  // 为什么要进行解锁？因为如果不解锁，notify之后，有线程被通知了也拿不到锁
+        cv.notify_one();   // 通知其中一个
+        // cv.notify_all();    // 给所有线程发送信号，但依然只有一个线程能进入
+        std::this_thread::sleep_for(std::chrono::seconds(3));    // 每隔一秒写入一次数据
+    }
+}
+
+void ThreadRead(int i)
+{
+    for (;;)
+    {
+        std::cout << "read msg" << std::endl;
+        std::unique_lock<std::mutex> lock(mux);
+        // cv.wait(lock);  // 阻塞等待信号 解锁
+        cv.wait(lock, [i]() {
+            std::cout << i << " wait" << std::endl;
+            // return false;
+            return true;    // 返回true则不会阻塞，但是也无法进
+            return !msgs_.empty();
+        });   // 阻塞等待可以添加条件，只有满足条件才会进入，否则会继续wait()
+        // 获取信号后锁定
+        while (!msgs_.empty())
+        {
+            std::cout << i << " read " << msgs_.front() << std::endl;
+            msgs_.pop_front();
+        }
+    }
+}
+
+
+int main(int argc, char* argv[])
+{
+    std::thread th(ThreadWrite);
+    th.detach();
+
+    for (int i = 0; i < 3; ++i)
+    {
+        std::thread th(ThreadRead, i+1);
+        th.detach();
+    }
+
+    getchar();
+
+    return 0;
+}
+```
+
+<B>（一）改变共享变量的线程步骤</B>
+
+> 准备好信号量
+
+`std::condition_variable cv;`
+
+> 1 获得 std::mutex (常通过 std::unique_lock)
+
+`std::unique_lock<std::mutex> lock(mux);`
+
+> 2 在获取锁时进行修改
+
+`msgs_.push_back(ss.str());`
+
+> 3 释放锁并通知读取线程
+
+```cpp
+lock.unlock();  // 为什么要进行解锁？因为如果不解锁，notify之后，有线程被通知了也拿不到锁
+cv.notify_one();   // 通知其中一个
+cv.notify_all();    // 给所有线程发送信号，但依然只有一个线程能进入
+```
+
+上面已经描述了`notify_one`和`notify_all`的区别，在表现上如下：
+
+`notify_one()`结果如下：
+
+```cpp
+read msg
+3 read Write msg 2
+read msg
+2 read Write msg 3
+read msg
+1 read Write msg 4
+read msg
+3 read Write msg 5
+read msg
+2 read Write msg 6
+read msg
+1 read Write msg 7
+```
+
+`notify_all()`结果如下：
+
+```cpp
+3 read Write msg 12
+read msg
+read msg
+read msg
+3 read Write msg 13
+read msg
+read msg
+read msg
+1 read Write msg 14
+read msg
+read msg
+read msg
+```
+
+> 发现，当有一个线程进入写数据后，`notify_one()`只有一个线程重新进入for循环，事实上这个进入的线程也是刚进入写数据的那个线程，此时其他线程还在阻塞等待锁。
+>
+> 但是`notify_all()`却有三个线程重新进入for循环，这是因为`notify_all()`会通知每个进入阻塞的线程，但也只有一个线程可以获得锁。
+> 
+> 前面的情况都是基于`cv_.wait(lock)`，如果是`cv.wait(lock, [i]() { return !msgs_.empty(); });`则不会出现这个问题，因为`cv.wait(lock, lambda)`如果lambda返回的是false，则会重新进入阻塞等待，源码在下面介绍。
+
+<B>（二）等待信号读取共享变量的线程步骤</B>
+
+> 1. 获得与改变共享变量的线程步骤
+
+`std::unique_lock<std::mutex> lock(mux);`
+
+> 2. wait() 等待信号通知
+
+> 2.1 无lambda 表达式
+
+```cpp
+// 阻塞等待 notify_one notify_all 通知
+cv.wait(lock);  // 阻塞等待信号 解锁
+
+// 接收到通知会再次获取锁标注，也就是说如果此时mux资源被占用，wait函数会阻塞
+std::cout << i << " read " << msgs_.front() << std::endl;
+msgs_.pop_front();
+```
+
+> 2.2 lambda 表达式 `cv.wait(lock, []{return !msgs_.empty();})`
+
+只在`std:unique_lock<std::mutex>`上工作的`std::condition_variable`
+
+源码：
+
+```cpp
+void wait(unique_lock<mutex>& _Lck) {   // wait for signal
+    // Nothing to do to comply with LWG-2135 because std::mutex lock/unlock are nothrow
+    _Check_C_return(_Cnd_wait(_Mycnd(), _Lck.mutex()->_Mymtx()));
+}
+
+template <class _Predicate>
+void wait(unique_lock<mutex>& _Lck, _Predicate _Pred) { // wait for signal and test predicate
+    while (!_Pred()) {
+        wait(_Lck);
+    }
+}
+```
+
+使用`condition_variable`改进109thread_msg_server中的例子：
+
+主要修改了文件：`xmsg_server.h` 和 `xmsg_server.cpp`
+
+```cpp
+// xmsg_server.h
+#ifndef XMSGSERVER_H_
+#define XMSGSERVER_H_
+
+#include "xthread.h"
+#include <string>
+#include <list>
+#include <mutex>
+#include <condition_variable>
+
+class XMsgServer : public XThread
+{
+public:
+    // 给当前线程发消息
+    void SendMsg(std::string msg);
+
+    void Stop() override;   // 重写了父类Stop()方法
+private:
+    // 处理消息的线程入口函数
+    void  Main() override;
+
+    // 消息队列缓冲
+    std::list<std::string> msgs_;
+
+    // 互斥访问消息队列
+    std::mutex mux_;
+
+    std::condition_variable cv_;    // 添加了一个condition_cv变量
+
+};
+
+#endif
+
+// xmsg_server.cpp
+#include "xmsg_server.h"
+#include <iostream>
+
+// 给当前线程发消息
+void XMsgServer::SendMsg(std::string msg)
+{
+    std::unique_lock<std::mutex> lock(mux_);    // 确保单线程访问
+    msgs_.push_back(msg);
+    lock.unlock();
+    cv_.notify_one();
+}
+
+
+// 处理消息的线程入口函数
+void  XMsgServer::Main()
+{
+    while (!is_exit())  // 循环处理
+    {
+        // std::this_thread::sleep_for(std::chrono::milliseconds(10)); // 消息延迟处理, 因为使用condition_variable的wait方法，会自己阻塞等待，所以不需要延时
+        std::unique_lock<std::mutex> lock(mux_); // 每次循环都会释放锁
+        cv_.wait(lock, [this] {
+                std::cout << "wait cv" << std::endl;
+                if (is_exit()) return true; // 线程被通知后结束阻塞，然后重入；此时msgs_为空(因为没有再写入数据)，返回false，因此该线程继续阻塞。所以判断一下is_exit()程序结束了，要立即退出。
+                return !msgs_.empty();
+            });  // 当发完10个数据后，在这里被阻塞了。因为线程一直阻塞等待锁
+
+        while (!msgs_.empty()) {
+            // 消息处理业务逻辑
+            std::cout << "recv: " << msgs_.front() << std::endl;
+            msgs_.pop_front();
+        }
+
+    }
+}
+
+void XMsgServer::Stop()     // 重写父类Stop()方法，添加了cv_.notify_all()方法，因为有些线程进入阻塞等待状态，必须通知一下才能结束阻塞重入。
+{
+    is_exit_ = true;
+    cv_.notify_all();   // 通知所有的线程
+    Wait();
+}
+
+```
+
+<B>注意：</B>`cv_.wait(lock, []{})`的退出机制。
+
+
+### 3.5 线程异步和通信
+
+#### 3.5.1 promise 和 future
+
+- promise 用于异步传输变量
+
+> std::promise 提供存储异步通信的值，再通过其对象创建的std::future异步获得结果。
+> 
+> std::promise 只能使用一次。void set_value(_Ty&& _Val)设置传递值，只能调用一次
+
+- std::future 提供访问异步操作结果的机制
+
+> get() 阻塞等待promise_set_value 的值
+
+- 代码演示
+
+```cpp
+
+```

@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.5)
-project(thread_RAII)
+project(condition_variable)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 14)
 
 find_package(Threads REQUIRED)
 
-add_executable(${PROJECT_NAME} 108thread_RAII.cpp)
+add_executable(${PROJECT_NAME} 110condition_variable.cpp)
 
 target_link_libraries(${PROJECT_NAME} Threads::Threads)
