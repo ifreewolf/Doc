@@ -1948,7 +1948,6 @@ void XMsgServer::Stop()     // 重写父类Stop()方法，添加了cv_.notify_al
     cv_.notify_all();   // 通知所有的线程
     Wait();
 }
-
 ```
 
 <B>注意：</B>`cv_.wait(lock, []{})`的退出机制。
@@ -2027,3 +2026,75 @@ end TestFuture
 
 #### 3.5.2 packaged_task 异步调用函数打包
 
+
+- packaged_task 包装函数为一个对象，用于异步调用。其返回值能通过`std::future`对象访问
+- 与`bind`的区别，可异步调用，函数访问和获取返回值分开调用。
+
+
+<B>示例如下：</B>
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <future>
+#include <string>
+
+std::string TestPack(int index) // 线程处理函数
+{
+    std::cout << "begin TestPack " << index << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(2));   // 模拟事件处理2s后，返回结果
+    return "Test Pack return";
+}
+
+int main(int argc, char* argv[])
+{
+    std::packaged_task<std::string(int)> task(TestPack);    // std::string(int) 这是函数指针
+    auto result = task.get_future();
+
+    // task(100);
+    std::thread th(std::move(task), 101);   // 启动线程处理函数
+
+    std::cout << "begin result get" << std::endl;
+
+    // 测试是否超时
+    for (int  i = 0; i < 30; ++i) { 
+        if (result.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+            continue;
+        }
+    }
+    
+    if (result.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout) {
+        std::cout << "wait result timeout" << std::endl;
+    } else {
+        std::cout << "result get " << result.get() << std::endl;    // 阻塞等待线程处理结果返回
+    }
+
+    th.join();
+
+    return 0;
+}
+```
+
+> std::packaged_task 是一个异步处理函数，可异步调用，函数访问和获取返回值分开调用。
+
+
+#### 3.5.3 async
+
+C++11 异步运行一个函数，并返回保有其结果大的std::future
+
+- launch::deferred 延迟执行 在调用 wait 和 get 时，调用函数代码
+- launch::async 创建线程(默认)
+- 返回的线程函数的返回值类型的std::future<int> (std::future<线程函数的返回值类型>)
+- re.get() 获取结果，会阻塞等待
+
+与packaged_task一样可以实现函数调用和结果返回的异步处理，async可以根据情况不创建线程，但可以实现一样的功能。
+
+不创建线程的异步结果：
+
+```bash
+main thread id 140243730872128
+begin future get
+begin in TestAsync 140243730872128      # 上下两个线程id是一样的，说明
+future.get() = TestAsync string return
+end future get
+```
