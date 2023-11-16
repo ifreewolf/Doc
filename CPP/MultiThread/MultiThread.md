@@ -2089,12 +2089,354 @@ C++11 异步运行一个函数，并返回保有其结果大的std::future
 
 与packaged_task一样可以实现函数调用和结果返回的异步处理，async可以根据情况不创建线程，但可以实现一样的功能。
 
+```cpp
+#include <thread>
+#include <iostream>
+#include <future>
+#include <string>
+
+std::string TestAsync(int index)
+{
+    std::cout << index << " begin in TestAsync " << std::this_thread::get_id() << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    return "TestAsync string return";
+}
+
+int main(int argc, char* argv[])
+{
+
+    // 创建异步线程
+    // 不创建线程启动异步任务
+    std::cout << "main thread id " << std::this_thread::get_id() << std::endl;
+    auto future = async(std::launch::deferred, TestAsync, 500);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::cout << "begin future get" << std::endl;
+    std::cout << "future.get() = " << future.get() << std::endl;
+    std::cout << "end future get" << std::endl;
+
+    // 创建异步线程
+    std::cout << "======创建异步线程======" << std::endl;
+    auto future2 = async(TestAsync, 101);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::cout << "begin future2 get " << std::endl;
+    std::cout << "future2.get() = " << future2.get() << std::endl;
+    std::cout << "end future2 get" << std::endl;
+
+    getchar();
+
+    return 0;
+}
+```
+
 不创建线程的异步结果：
 
 ```bash
+main thread id 139930846033728
+begin future get                                        # main开始准备接收函数返回值, 会发现即使sleep 500ms，main线程依然在等待按照顺序执行说明没有开启新的线程
+100 begin in TestAsync 139930846033728                  # 线程 id 与main线程 id 一致，未开启新的线程
+future.get() = TestAsync string return                  # 线程sleep 2s，此时在阻塞等待返回结果
+end future get
+
 main thread id 140243730872128
-begin future get
-begin in TestAsync 140243730872128      # 上下两个线程id是一样的，说明
-future.get() = TestAsync string return
+begin future get                        
+begin in TestAsync 140243730872128      # 上下两个线程id是一样的，说明没有创建线程
+future.get() = TestAsync string return  # 阻塞等待函数返回值，等TestAsync()处理完返回才能获取到。
 end future get
 ```
+
+创建线程的异步结果：
+
+```bash
+======创建异步线程======
+101 begin in TestAsync 139930846029568      # TestTestAsync线程先进入运行了，线程号与main的线程也不同，说明是另外开启的线程
+begin future2 get                           # main中因为sleep的缘故，这行log比上一行晚打印，同时也能证明：线程提前运行了但这个时候线程要sleep 2秒
+future2.get() = TestAsync string return     # 此时在阻塞等待线程2s处理，线程返回后获取到这个返回值。
+end future2 get
+```
+
+## 4. C++17 多核并行计算
+
+### 4.1 手动实现多核base 16编码
+
+#### 4.1.1 实现base16编码
+
+> 二进制转换为字符串
+> 
+> 一个字节8位 拆分为两个4位字节(最大值16)
+>
+> 拆分后的字节映射到 0123456789abcdef
+
+```cpp
+#include <thread>
+#include <iostream>
+#include <string>
+#include <vector>
+#include <chrono>
+#include <execution>
+
+static const char base16[] = "0123456789abcdef";
+
+void Base16Encode(const unsigned char* data, int size, unsigned char* out)
+{
+    for (int i = 0; i < size; i++)
+    {
+        unsigned char d = data[i];
+        // 0000 0000
+        // 1234 5678 >>4 0000 1234
+        // 1234 5678 & 0000 1111 0000 5678
+        char a = base16[d >> 4];
+        char b = base16[d & 0x0F];
+        out[i * 2] = a;
+        out[i*2 + 1] = b;
+    }
+}
+
+// C++11 多核base16编码
+void Base16EncodeThread(const std::vector<unsigned char>& data, std::vector<unsigned char>& out)
+{
+    int size = data.size();
+    int th_count = std::thread::hardware_concurrency(); // 系统支持的线程核心数
+    // std::cout << "hardware_concurrency: " << th_count << std::endl;
+    // 切片数据
+    int slice_count = size / th_count;  // 根据线程数切片
+    if (size < th_count)   // 只切一片
+    {
+        th_count = 1;
+        slice_count = size;
+    }
+
+    // 准备好线程
+    std::vector<std::thread> ths;
+    ths.resize(th_count);
+
+    // 任务分配到各个线程
+    for (int i = 0; i < th_count; i++)
+    {
+        // 1234 5678 9abc defg
+        int offset = i * slice_count;
+        int count = slice_count;
+
+        // 最后一个
+        if (th_count > 1 && i == th_count - 1)
+        {
+            count = slice_count + size % th_count;
+        }
+        // std::cout << offset << ":" << count << std::endl;
+
+        ths[i] = std::thread(Base16Encode, data.data() + offset, count, out.data() + offset*2);
+    }
+
+    // 等待所有线程处理结束
+    for (auto& th : ths)
+    {
+        th.join();
+    }
+
+}
+
+int main(int argc, char* argv[])
+{
+    std::string test_data = "测试base16编码";
+    unsigned char out[1024] = { 0 };
+    Base16Encode((unsigned char*)test_data.data(), test_data.size(), out);
+    std::cout << "base16: " << out << std::endl;
+
+    // 初始化测试数据
+    std::vector<unsigned char> in_data;
+    in_data.resize(1024*1024*100);   // 20M
+    // in_data.resize(100);   // 20M
+    for (int i = 0; i < in_data.size(); i++)
+    {
+        in_data[i] = i % 256;
+    }
+    
+    std::vector<unsigned char> out_data;
+    out_data.resize(in_data.size()*2);
+
+    // 测试单线程base16编码效率
+    {
+        std::vector<unsigned char> out_data;
+        out_data.resize(in_data.size()*2);
+        std::cout << "单线程base16编码 开始计算" << std::endl;
+        auto start = std::chrono::system_clock::now();
+        Base16Encode(in_data.data(), in_data.size(), out_data.data());
+        auto end = std::chrono::system_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        // std::cout << out_data.data() << std::endl;
+        std::cout << "编码：" << in_data.size() << " 字节数据花费 " << duration.count() << " 毫秒" << std::endl;
+    }
+
+    // 测试C++11 多线程base16编码效率
+    {
+        std::vector<unsigned char> out_data;
+        out_data.resize(in_data.size()*2);
+        std::cout << "C++11 多线程base16编码 开始计算" << std::endl;
+        auto start = std::chrono::system_clock::now();
+        Base16EncodeThread(in_data, out_data);
+        auto end = std::chrono::system_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        // std::cout << out_data.data() << std::endl;
+        std::cout << "编码：" << in_data.size() << " 字节数据花费 " << duration.count() << " 毫秒" << std::endl;
+    }
+
+    // 测试C++17 多线程base16编码效率
+    {
+        std::vector<unsigned char> out_data;
+        out_data.resize(in_data.size()*2);
+        std::cout << "C++17 多线程base16编码 开始计算" << std::endl;
+        auto start = std::chrono::system_clock::now();
+        unsigned char* idata = in_data.data();
+        unsigned char* odata = out_data.data();
+        // #include <execution>
+        std::for_each(std::execution::par,  // 并行计算 多核    200万个数据需要进入200次
+            in_data.begin(), in_data.end(), // 数据的开头和结尾地址
+            [&](auto& d)
+            {
+                char a = base16[(d >> 4)];
+                char b = base16[(d & 0x0f)];
+                int index = &d - idata;    // 获得d在数组中的位置
+                odata[index * 2] = a;
+                odata[index * 2 + 1] = b;
+
+            }
+        );
+
+        auto end = std::chrono::system_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        // std::cout << out_data.data() << std::endl;
+        std::cout << "编码：" << in_data.size() << " 字节数据花费 " << duration.count() << " 毫秒" << std::endl;
+    }
+}
+```
+
+CMakeLists.txt配置如下：
+
+```make
+cmake_minimum_required(VERSION 3.5)
+project(base_thread_cpp17)
+
+set(CMAKE_CXX_STANDARD 17)
+
+find_package(Threads REQUIRED)
+
+add_executable(${PROJECT_NAME} 115base_thread_c++17.cpp)
+
+target_link_libraries(${PROJECT_NAME} Threads::Threads tbb) # 需要添加一个tbb的依赖库
+```
+
+运行结果如下：
+
+```bash
+base16: e6b58be8af95626173653136e7bc96e7a081
+单线程base16编码 开始计算
+编码：104857600 字节数据花费 402 毫秒
+C++11 多线程base16编码 开始计算
+编码：104857600 字节数据花费 30 毫秒
+C++17 多线程base16编码 开始计算
+编码：104857600 字节数据花费 71 毫秒
+```
+
+---
+
+
+## 5. C++11 14 17 线程池实现
+
+降低线程创建的开销，一次启动，重复使用。
+
+### 5.1 线程池v1.0基础版本
+
+#### 5.1.1 初始化线程池
+
+> 确定线程数量，并做好互斥访问
+
+#### 5.1.2 启动所有线程
+
+`std::vector<std::thread*> threads_;`
+
+```cpp
+std::unique_lock<std::mutex> lock(mutex_);
+for (int i = 0; i < thread_num_; i++)
+{
+    auto th = new std::thread(&XThreadPool::Run, this);
+    threads_.push_back(th);
+}
+```
+
+#### 5.1.3 准备好任务处理基类和插入任务
+
+```cpp
+// 线程分配的任务类
+class XTask
+{
+public:
+    // 执行具体的任务
+    virtual int Run() = 0;
+}
+```
+
+> 存储任务的列表
+
+`std::list<XTask*> tasks_;`
+
+> 插入任务，通知线程池处理
+
+```cpp
+std::unique_lock<std::mutex> lock(mutex_);
+tasks_.push_back(task);
+condition_.notify_one();
+```
+
+#### 5.1.4 获取任务接口
+
+> 通过条件变量阻塞等待任务
+
+```cpp
+////////////////////////////////////////////
+// 获取任务
+XTaskType XThreadPool::GetTask()
+{
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (tasks_.empty())
+    {
+        condition_.wait(lock);  // 阻塞 等待通知
+    }
+    if (is_exit_)
+    {
+        return nullptr;
+    }
+    if (tasks_.empty())
+    {
+        return nullptr;
+    }
+    auto task = task_.front();
+    tasks_.pop_front();
+    return task;
+}
+```
+
+
+#### 5.1.5 执行任务线程入口函数
+
+```cpp
+void XThreadPool::Run()
+{
+    while(!IsExit())
+    {
+        // 获取任务
+        auto task = GetTask();
+        if (!task)
+            continue;
+
+        try
+        {
+            task->Run();
+        }
+        catch (...)
+        {
+            cerr << "XThreadPool::Run() exception" << std::endl;
+        }
+    }
+}
+```
+
+
