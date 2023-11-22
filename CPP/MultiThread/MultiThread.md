@@ -2440,3 +2440,63 @@ void XThreadPool::Run()
 ```
 
 
+
+---
+
+## 6. 基于线程池实现音视频批量转码工具
+
+
+## 7. C++20 线程特性
+
+### std::barrier 屏障
+
+使用场景：消费场景，30个线程需要一起执行的情况。等待30个线程全部就绪后，一起执行。
+
+
+#### arrive
+
+> 到达屏障并减少期待计数
+
+#### wait
+
+> 在阶段同步点阻塞，直至运行其阶段完成步骤
+
+#### arrive_and_wait
+
+> 到达屏障并期待计数减少一，然后阻塞直至当前阶段完成
+
+#### arrive_and_drop
+
+> 将后继阶段的初始期待计数和当前阶段的期待计数均减少一
+
+
+```cpp
+#include <barrier>
+#include <thread>
+#include <iostream>
+
+void TestBar(int i, std::barrier<> *bar)
+{
+    std::this_thread::sleep_for(std::chrono::seconds(i));
+    std::cout << "begin wait " << std::endl;
+    bar->wait(bar->arrive());   // 期待数 -1 阻塞等待，期待为0是返回
+    std::cout << "end wait " << std::endl;
+}
+
+int main(int argc, char *argv[])
+{
+    int count = 3;
+    std::barrier bar(count);  // 初始数量，3个线程都到了才会执行
+
+    for (int i = 0; i < count; i++)
+    {
+        std::thread th(TestBar, i, &bar);
+        th.detach();
+    }
+
+    getchar();
+
+
+    return 0;
+}
+```
