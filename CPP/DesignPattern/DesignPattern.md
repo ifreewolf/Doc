@@ -262,7 +262,7 @@ int main(int argc, char* argv[])
 ---
 
 
-# 二. 创建型模式之简单工厂
+# 二. 创建型模式之单例模式
 
 学习单例模式
 
@@ -271,3 +271,421 @@ int main(int argc, char* argv[])
 3. 单例的应用案例与思考：缓存
 
 比如：程序中的配置文件，需要一个对象来读取配置文件，如果设计为整个程序有且仅有一个对象来读取配置文件，则效率会高很多。
+
+## 1. 首先看一个基本的单例模式：
+
+```cpp
+#include <iostream>
+
+class Singleton
+{
+private:
+    Singleton() {
+        m_singer = NULL;
+        std::cout << "构造一个Singleton对象" << std::endl;
+    }
+public:
+    // 懒汉式交互，在调用的时候才开始创建对象，延迟加载
+    // 缺点：线程不安全，多个线程时，容易被创建多个线程
+    static Singleton* getInstance() {
+        if (m_singer == NULL) {
+            m_singer = new Singleton;
+        }
+        return m_singer;
+    }
+private:
+    static Singleton *m_singer;
+};
+
+Singleton* Singleton::m_singer = NULL; // new Singleton; 在c++中，构造函数不是线程安全的
+
+int main(int argc, char* argv[])
+{
+    // Singleton *p = new Singleton;   // error, inaccessible
+    Singleton *p1 = Singleton::getInstance();
+    Singleton *p2 = Singleton::getInstance();
+
+    std::cout << "&p1 = " << p1 << std::endl;
+    std::cout << "&p2 = " << p2 << std::endl;
+    printf("p1 = %x, p2 = %x\n", p1, p2);
+
+    /*
+    result:
+       
+    */
+    return 0;
+}
+```
+
+运行结果：
+
+```bash
+构造一个Singleton对象
+&p1 = 0x556cd1f41eb0
+&p2 = 0x556cd1f41eb0
+p1 = d1f41eb0, p2 = d1f41eb0
+```
+
+> 上述示例是一个基本的单例模式，同时单例模式根据创建的时机可分为：懒汉式和饿汉式。上述示例是一个懒汉式单例模》式，即在调用的时候才开始创建对象，延迟加载。
+>
+> 基本的懒汉式单例模式存在线程不安全的问题，即多个线程同时调用getInstance()方法时，可能被创建多个对象。如下所示：
+
+
+## 2. 懒汉式线程不安全示例
+
+---
+
+
+```cpp
+#include <iostream>
+#include <thread>
+
+class Singleton
+{
+private:
+    Singleton() {
+        m_singer = NULL;
+        std::cout << "构造一个Singleton对象" << std::endl;
+    }
+public:
+    // 懒汉式交互，在调用的时候才开始创建对象，延迟加载
+    // 缺点：线程不安全，多个线程时，容易被创建多个线程
+    static Singleton* getInstance() {
+        if (m_singer == NULL) {
+            m_singer = new Singleton;
+        }
+        return m_singer;
+    }
+private:
+    static Singleton *m_singer;
+};
+
+Singleton* Singleton::m_singer = NULL; // new Singleton; 在c++中，构造函数不是线程安全的
+
+void constructorSingleton(int i) {
+    std::cout << "ptr of single: " << Singleton::getInstance() << ", i = " << i << std::endl;
+}
+
+int main(int argc, char* argv[])
+{
+    for (int i = 0; i < 10; i++) {
+        std::thread t(constructorSingleton, i);
+        t.detach();
+    }
+
+    getchar();
+
+    return 0;
+}
+```
+
+运行结果：
+
+```bash
+构造一个Singleton对象
+ptr of single: 0x7f2b58000f70, i = 0
+ptr of single: 0x7f2b58000f70, i = 2
+ptr of single: 0x7f2b58000f70, i = 3
+造一个Singleton对象
+ptr of single: 0x7f2b50000b60, i = 4
+ptr of single: 0x7f2b58000f90, i = 7
+ptr of single: 0x7f2b58000f90, i = 5
+构构造一个Singleton对象
+ptr of single: 0x7f2b40000b60, i = 6
+ptr of single: 0x7f2b50000b60
+ptr of single: 0x7f2b58000f90, i = 7
+构造一个Singleton对象
+ptr of single: 0x7f2b40000b60, i = 8
+ptr of single: 0x7f2b40000b60, i = 9
+```
+
+> 从结果中可以看到，存在多个不同的Singleton对象。在实际项目中，这是一个很致命的问题，工程中使用 double check 来保证线程安全。
+
+
+## 3. Double check解决懒汉式线程安全问题
+
+```cpp
+#include <iostream>
+#include <thread>
+#include <mutex>
+
+std::mutex mux;
+
+class Singleton
+{
+private:
+    Singleton() {
+        m_singer = NULL;
+        std::cout << "构造一个Singleton对象" << std::endl;
+    }
+public:
+    // 懒汉式：double check，临界区保护
+    static Singleton* getInstance() {
+        if (m_singer == NULL) {
+            mux.lock();
+            if (m_singer == NULL) {
+                m_singer = new Singleton;
+            }
+            mux.unlock();
+        }
+        return m_singer;
+    }
+private:
+    static Singleton *m_singer;
+};
+
+Singleton* Singleton::m_singer = NULL; // new Singleton; 在c++中，构造函数不是线程安全的
+
+void constructorSingleton(int i) {
+    std::cout << "ptr of single: " << Singleton::getInstance() << ", i = " << i << std::endl;
+}
+
+int main(int argc, char* argv[])
+{
+    for (int i = 0; i < 10; i++) {
+        std::thread t(constructorSingleton, i);
+        t.detach();
+    }
+
+    getchar();
+
+    return 0;
+}
+```
+
+运行结果：
+
+```bash
+构造一个Singleton对象
+ptr of single: 0x7ff6c0000f70, i = 0
+ptr of single: 0x7ff6c0000f70, i = 1
+ptr of single: 0x7ff6c0000f70, i = 2
+ptr of single: 0x7ff6c0000f70, i = 3
+ptr of single: 0x7ff6c0000f70, i = 4
+ptr of single: 0x7ff6c0000f70, i = 5
+ptr of single: 0x7ff6c0000f70, i = 6
+ptr of single: 0x7ff6c0000f70, i = 7
+ptr of single: 0x7ff6c0000f70, i = 8
+ptr of single: 0x7ff6c0000f70, i = 9
+```
+
+> 从结果中可以看到整个过程只构建了一个对象，使用互斥锁来保护临界区。Double check中第一个check是用来给创建完对象后，跳出尝试创建对象，第一次check是线程不安全的；第二次check是当对象还未创建时，使用互斥锁避免重复创建对象。
+> 
+> 为什么不是一次check，使用互斥锁保护第一次check。这样会导致效率很低，即使已经创建了对象，但是由于互斥锁的存在，导致其他线程无法访问，会导致效率低下。
+
+
+## 4. 单例模式中-饿汉式
+
+代码示例：
+
+```cpp
+#include <iostream>
+
+class Singleton
+{
+private:
+    Singleton() {
+        m_singer = NULL;
+        std::cout << "构造一个Singleton对象" << std::endl;
+    }
+public:
+    // 懒汉式交互，在调用的时候才开始创建对象，延迟加载
+    // 缺点：线程不安全，多个线程时，容易被创建多个线程
+    static Singleton* getInstance() {
+        if (m_singer == NULL) {
+            m_singer = new Singleton;
+        }
+        return m_singer;
+    }
+private:
+    static Singleton *m_singer;
+};
+
+Singleton* Singleton::m_singer = new Singleton; // 饿汉式
+
+void constructorSingleton(int i) {
+    std::cout << "ptr of single: " << Singleton::getInstance() << ", i = " << i << std::endl;
+}
+
+int main(int argc, char* argv[])
+{
+
+    for (int i = 0; i < 10; i++) {
+        std::thread t(constructorSingleton, i);
+        t.detach();
+    }
+
+    getchar();
+
+
+
+    return 0;
+}
+```
+
+运行结果如下：
+
+```cpp
+构造一个Singleton对象
+ptr of single: 0x55a2fb235eb0, i = 0
+ptr of single: 0x55a2fb235eb0, i = 1
+ptr of single: 0x55a2fb235eb0, i = 2
+ptr of single: 0x55a2fb235eb0, i = 3
+ptr of single: 0x55a2fb235eb0, i = 4
+ptr of single: 0x55a2fb235eb0, i = 5
+ptr of single: 0x55a2fb235eb0, i = 7
+ptr of single: 0x55a2fb235eb0, i = 6
+ptr of single: 0x55a2fb235eb0, i = 8
+ptr of single: 0x55a2fb235eb0, i = 9
+```
+
+> 如上所示：在没有使用double check的情况下，饿汉式单例模式依然不会错误的生成多个对象。这是因为饿汉式在对象调用之前就已经生成了对象，不会出现多个线程争抢临界区的的可能。
+
+
+## 5. 单例模式的扩展与工程应用-缓存
+
+> 既然我们可以控制全局生成一个对象，那么有没有需要生成一个以上的对象呢？
+>
+> 解决策略： 缓存设计与Singleton的扩展
+>
+
+先来看一个使用缓存保存单例对象的例子：
+
+### 5.1 缓存-单例
+
+```cpp
+// 回避多线程的安全问题
+#include <iostream>
+#include <map>
+#include <stdio.h>
+
+class Singleton;
+static std::map<std::string, Singleton*> myMap = std::map<std::string, Singleton*>();
+
+// 懒汉-延迟加载
+class Singleton
+{
+private:
+    Singleton() {
+        m_singer = NULL;
+        std::cout << "单例正在被构建" << std::endl;
+    }
+public:
+    static Singleton* getInstance() {
+        if (myMap.find(DEFAULT_KEY) != myMap.end())
+            return myMap.find(DEFAULT_KEY)->second;
+        if (m_singer == NULL) {
+            m_singer = new Singleton;
+            myMap[DEFAULT_KEY] = m_singer;
+        }
+        return m_singer;
+    }
+private:
+    static Singleton* m_singer;
+    static std::string DEFAULT_KEY;
+};
+
+Singleton* Singleton::m_singer = NULL;
+std::string Singleton::DEFAULT_KEY = "One";
+
+
+int main(int argc, char* argv[])
+{
+    Singleton* p1 = Singleton::getInstance();
+    Singleton* p2 = Singleton::getInstance();
+
+    std::cout << "&p1 = " << p1 << ", &p2 = " << p2 << std::endl;
+
+    return 0;
+}
+```
+
+运行结果：
+
+```bash
+单例正在被构建
+&p1 = 0x55e7d4d30eb0, &p2 = 0x55e7d4d30eb0
+```
+
+> 单例对象被保存在map容器中。
+
+
+### 5.2 多个单例对象实现
+
+在下面例子中，使用map来保存多个单例对象。
+
+```cpp
+#include <string>
+#include <iostream>
+#include <map>
+
+// 缓存的实例个数
+const static int NUM_MAX = 5;
+class Singleton;
+static std::map<int, Singleton*> myMap = std::map<int, Singleton*>();
+
+class Singleton
+{
+private:
+    Singleton() {
+        m_singer = NULL;
+        std::cout << "正在构建Singleton" << std::endl;
+    }
+public:
+    static Singleton* getInstance() {
+        m_singer = myMap[m_InstanceCount];
+
+        if (m_singer == NULL) {
+            m_singer = new Singleton;
+            myMap[m_InstanceCount] = m_singer;
+        }
+        m_InstanceCount++;
+        if (m_InstanceCount > NUM_MAX) {
+            m_InstanceCount = 1;
+        }
+        return m_singer;
+    }
+private:
+    static Singleton *m_singer;
+    static int m_InstanceCount; // 存放实例的个数
+}; 
+
+Singleton* Singleton::m_singer = NULL;
+int Singleton::m_InstanceCount = 1;
+
+int main(int argc, char* argv[])
+{
+    Singleton* p1 = Singleton::getInstance();
+    Singleton* p2 = Singleton::getInstance();
+    Singleton* p3 = Singleton::getInstance();
+    Singleton* p4 = Singleton::getInstance();
+    Singleton* p5 = Singleton::getInstance();
+
+    printf("p1 = %x, p2 = %x, p3 = %x, p4 = %x, p5 = %x\n", p1, p2, p3, p4, p5);
+
+    Singleton* p6 = Singleton::getInstance();
+    Singleton* p7 = Singleton::getInstance();
+    Singleton* p8 = Singleton::getInstance();
+    Singleton* p9 = Singleton::getInstance();
+    Singleton* p10 = Singleton::getInstance();
+
+    printf("p6 = %x, p7 = %x, p8 = %x, p9 = %x, p10 = %x\n", p6, p7, p8, p9, p10);
+
+    getchar();
+    return 0;
+}
+```
+
+运行结果：
+
+```bash
+正在构建Singleton
+正在构建Singleton
+正在构建Singleton
+正在构建Singleton
+正在构建Singleton
+p1 = 80629ef0, p2 = 8062a360, p3 = 8062a3c0, p4 = 8062a420, p5  = 8062a480
+p6 = 80629ef0, p7 = 8062a360, p8 = 8062a3c0, p9 = 8062a420, p10 = 8062a480
+```
+
+> 可以看到，多个单例模式在超出最大缓存数量之后会重复利用对象。

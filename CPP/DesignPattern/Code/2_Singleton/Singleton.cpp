@@ -14,23 +14,23 @@ private:
 public:
     // 懒汉式交互，在调用的时候才开始创建对象，延迟加载
     // 缺点：线程不安全，多个线程时，容易被创建多个线程
-    // static Singleton* getInstance() {
-    //     if (m_singer == NULL) {
-    //         m_singer = new Singleton;
-    //     }
-    //     return m_singer;
-    // }
-    // 懒汉式：double check，临界区保护
     static Singleton* getInstance() {
         if (m_singer == NULL) {
-            mux.lock();
-            if (m_singer == NULL) {
-                m_singer = new Singleton;
-            }
-            mux.unlock();
+            m_singer = new Singleton;
         }
         return m_singer;
     }
+    // 懒汉式：double check，临界区保护
+    // static Singleton* getInstance() {
+    //     if (m_singer == NULL) {
+    //         mux.lock();
+    //         if (m_singer == NULL) {
+    //             m_singer = new Singleton;
+    //         }
+    //         mux.unlock();
+    //     }
+    //     return m_singer;
+    // }
     /*
     result:
         构造一个Singleton对象
@@ -50,7 +50,7 @@ private:
     static Singleton *m_singer;
 };
 
-Singleton* Singleton::m_singer = NULL; // new Singleton; 在c++中，构造函数不是线程安全的
+// Singleton* Singleton::m_singer = NULL; // new Singleton; 在c++中，构造函数不是线程安全的
 Singleton* Singleton::m_singer = new Singleton; // 饿汉式
 
 void constructorSingleton(int i) {
@@ -106,3 +106,6 @@ int main(int argc, char* argv[])
 
     return 0;
 }
+
+
+

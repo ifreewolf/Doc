@@ -10,3 +10,7 @@ add_executable(${PROJECT_NAME}
 )
 
 target_link_libraries(${PROJECT_NAME} Threads::Threads)
+
+
+add_executable(cacheSingleton CacheAndSingleton.cpp)
+add_executable(multiSingleton MultiSingleton.cpp)
