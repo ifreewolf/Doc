@@ -689,3 +689,126 @@ p6 = 80629ef0, p7 = 8062a360, p8 = 8062a3c0, p9 = 8062a420, p10 = 8062a480
 ```
 
 > 可以看到，多个单例模式在超出最大缓存数量之后会重复利用对象。
+
+
+---
+
+# 工厂模式
+
+> 场景：实现一个导出数据的应用框架，来让客户选择数据的导出方式，并真正执行数据导出。
+>
+> 通常这种系统，在导出数据上，会有一些约定的方式，比如导出成：csv格式、数据库备份方式、Excel格式、Xml格式等等。
+>
+> 从封装的角度来说，我们希望导出数据的业务功能对象创建ExportFileApi的具体实例，目前它只知道接口，怎么办？
+
+
+## 工厂模式示例
+
+```cpp
+#include <iostream>
+#include <string>
+
+class ExportFileApi
+{
+public:
+    virtual bool exportData(std::string data) = 0;
+protected:
+    ExportFileApi(){}
+};
+
+// 具体化的子类
+class ExportTxtFile : public ExportFileApi
+{
+public:
+    bool exportData(std::string data) {
+        std::cout << "正在导出数据" << data << "到csv文件" << std::endl;
+    }
+};
+
+// 生成数据到数据库
+class ExportDB : public ExportFileApi
+{
+public:
+    bool exportData(std::string data) {
+        std::cout << "正在导出数据到" << data << "到数据库" << std::endl;
+    }
+};
+
+// 不让main函数知道有ExportDB和ExportTxtFile这两个类
+// 实现一个ExportOperate，这个叫导出数据的业务功能对象
+class ExportOperate // 这个也是接口
+{
+public:
+    bool exportData(std::string data) {
+        ExportFileApi* pApi = factoryMethod();
+        return pApi->exportData(data);
+    }
+protected:
+    virtual ExportFileApi* factoryMethod() = 0;
+};
+
+// 具体的实现对象，完成导出工作
+class ExportTxtFileOperate : public ExportOperate
+{
+protected:
+    ExportFileApi* factoryMethod() {
+        return new ExportTxtFile;
+    }
+};
+
+class ExportDBOperate : public ExportOperate
+{
+protected:
+    ExportFileApi* factoryMethod() {
+        return new ExportDB;
+    }
+};
+
+// 开放ExportTxtFileOperate和ExportDBOperate
+
+
+int main(int argc, char* argv[])
+{
+    ExportOperate* pOperate = new ExportTxtFileOperate();
+    pOperate->exportData("HaHa");
+    return 0;
+}
+```
+
+
+## 工厂模式UML图
+
+<div>
+    <img src="./image/工厂模式.png" />
+</div>
+
+
+1. 工厂方法模式的功能：
+
+工厂方法的主要功能是让父类在不知道具体实现的情况下，完成自身的功能调用，而具体的实现延迟到子类来实现。
+
+2. 实现成抽象类
+
+工厂方法的实现中，通常父类会是一个抽象类，里面包含创建所需对象的抽象方法，这些抽象方法就是工厂方法。
+
+3. 实现成具体的类
+
+也可以把父类实现成为一个具体的类，这种情况下，通常是在父类中提供获取所需对象的默认实现方法，这样就算没有具体的子类，也能够运行。
+
+4. 工厂方法的参数和返回值
+
+工厂方法的实现中，可能需要参数，以便决定到底选用哪一种具体的实现。
+
+一般工厂方法返回的是被创建对象的接口对象，当然也可以是抽象类或者一个具体的类的实例。
+
+
+## 工厂模式的工程应用-IOC/DI
+
+工厂方法模式与IoC/DI
+
+- 依赖注入：应用程序依赖容器创建并注入它所需要的外部资源
+
+- 控制反转：容器控制应用程序，由容器反向的向应用程序注入应用程序所需要的。
+
+
+
