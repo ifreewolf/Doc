@@ -810,5 +810,271 @@ int main(int argc, char* argv[])
 
 - 控制反转：容器控制应用程序，由容器反向的向应用程序注入应用程序所需要的。
 
+IOC代码示例：
+
+```cpp
+#include <string>
+#include <map>
+#include <memory>
+#include <functional>
+#include <iostream>
+
+template<class T>
+class IoCContainer
+{
+public:
+    IoCContainer(void) {}
+    ~IoCContainer()
+    {
+
+    }
+
+    // 注册需要创建对象的构造函数，通过一个唯一的标识，以便以后查找
+    template<class Drived>
+    void RegisterType(std::string strKey) {
+        std::function<T* ()> function = [] {return new Drived(); };
+        RegisterType(strKey, function);
+    }
+
+    // 根据唯一的标识去查找对应的构造函数
+    T* Resolve(std::string strKey) {
+        if (m_createMap.find(strKey) == m_createMap.end())
+            return nullptr;
+        std::function<T* ()> function = m_createMap[strKey];
+        return function();
+    }
+
+    // 创建智能指针
+    std::shared_ptr<T> ResolveShared(std::string strKey) {
+        T* ptr = Resolve(strKey);
+        return std::shared_ptr<T>(ptr);
+    }
+private:
+    void RegisterType(std::string strKey, std::function<T* ()> creator) {
+        if (m_createMap.find(strKey) != m_createMap.end()) {
+            throw std::invalid_argument("已经存在这个key了");
+        }
+        m_createMap.emplace(strKey, creator);
+    }
+private:
+    std::map<std::string, std::function<T* ()>> m_createMap;
+};
 
 
+struct ICar
+{
+    virtual ~ICar() {}
+    virtual void test() const = 0;
+};
+
+
+struct Bus : ICar
+{
+    Bus() {}
+    void test() const { std::cout << "Bus::test()" << std::endl; }
+};
+
+struct Track : ICar
+{
+    Track() {}
+    void test() const { std::cout << "Track::test()" << std::endl; }
+};
+
+
+int main(int argc, char* argv)
+{
+    IoCContainer<ICar> carIOC;
+    carIOC.RegisterType<Bus>("bus");
+    carIOC.RegisterType<Track>("track");
+
+    std::shared_ptr<ICar> bus = carIOC.ResolveShared("bus");
+    bus->test();
+    std::shared_ptr<ICar> track = carIOC.ResolveShared("track");
+    track->test();
+    return 0;
+}
+```
+
+
+## 工厂模式的本质-依赖倒置原则-让子类选择实现
+
+- 依赖倒置原则告诉我们“要依赖抽象，不要依赖于具体类”：不能让高层组件依赖于低层组件，而且不管高层组件还是低层组件，都应该依赖于抽象。
+- 何时选用工厂方法模式
+- 1：如果一个类需要创建某个接口的对象，但是又不知道具体的实现，这种情况可以选用工厂方法模式，把创建对象的工作延迟到子类去实现
+- 2：如果一个类本身就希望由它的子类来创建所需的对象的时候，应该使用工厂方法模式。
+
+
+
+# 抽象工厂
+
+- 学习抽象工厂模式
+- 一：抽象工厂模式的介绍-定义、结构、参考实现、场景问题
+- 二：抽象工厂模式的典型疑问与优缺点评价
+- 三：抽象工厂模式的应用案例与思考
+
+## 场景
+
+- 考虑这样一个实际应用：我需要完成两套GUI的表示层，一个是在PC机，另一个是在平板、手机上完成这个应用程序的界面。
+- 通常一个显著的设备差别就在于分辨率。
+
+如何设计
+
+- 从封装的角度来说，我们希望根据布局器配置我们的控件，我们开放布局器接口和控件接口，供客户端调用。
+
+没有使用模板的实现方式如下：
+
+```cpp
+#include <iostream>
+using namespace std;
+
+class FrameApi
+{
+public:
+    virtual void draw() = 0;
+protected:
+    FrameApi() {};
+};
+
+class LayoutApi // 分辨率的布局器
+{
+public:
+    virtual void installFrame() = 0;
+protected:
+    LayoutApi() {}
+};
+
+// pc上的Frame
+class ComputerFrame : public FrameApi
+{
+public:
+    ComputerFrame(int pins) : m_pins(pins) {
+
+    }
+
+    void draw() {
+        std::cout << "现在是pc机的Frame，我适用的分辨率是" << m_pins << std::endl;
+    }
+private:
+    int m_pins;
+};
+
+class MobileFrame : public FrameApi
+{
+public:
+    MobileFrame(int pins) : m_pins(pins) {
+
+    }
+
+    void draw() {
+        std::cout << "现在是Mobile的Frame，我适用的分辨率是" << m_pins << std::endl;
+    }
+private:
+    int m_pins;
+};
+
+
+// 高分辨率的布局
+class HighLayout : public LayoutApi
+{
+public:
+    HighLayout(int FrameAdapterPins) : m_FrameAdapterPins(FrameAdapterPins) {
+
+    }
+
+    void installFrame() {
+        std::cout << "现在是在PC环境下，我们使用的高分辨率布局" << m_FrameAdapterPins << std::endl;
+    }
+private:
+    int m_FrameAdapterPins;
+};
+
+
+// 低分辨率的布局
+class LowLayout : public LayoutApi
+{
+public:
+    LowLayout(int FrameAdapterPins) : m_FrameAdapterPins(FrameAdapterPins) {
+
+    }
+
+    void installFrame() {
+        std::cout << "现在是在Mobile环境下，我们使用的低分辨率布局" << m_FrameAdapterPins << std::endl;
+    }
+private:
+    int m_FrameAdapterPins;
+};
+
+
+// 创建产品的简单工厂
+class FrameFactory
+{
+public:
+    static FrameApi* createFrame(int type) {
+        if (type == 1)
+            return new ComputerFrame(1024);
+        if (type == 2)
+            return new MobileFrame(720);
+        return nullptr;
+    }
+};
+
+
+class LayoutFactory
+{
+public:
+    static LayoutApi* createLayout(int type) {
+        if (type == 1)
+            return new HighLayout(1200);
+        if (type == 2)
+            return new LowLayout(800);
+        return nullptr;
+    }
+
+};
+
+
+class GUIEngineer
+{
+public:
+    // FrameType:是用来表述选择Frame控件的类型
+    // LayoutType:是用来表述选择布局管理器的类型
+    void prepareDraw(int FrameType, int LayoutType) {
+        this->pFrame = FrameFactory::createFrame(FrameType);
+        this->pLayout = LayoutFactory::createLayout(LayoutType);
+        pFrame->draw();
+        pLayout->installFrame();
+    }
+private:
+    FrameApi* pFrame;
+    LayoutApi* pLayout;
+};
+
+
+int main(int argc, char *argv[])
+{
+    GUIEngineer* pEng = new GUIEngineer;
+    pEng->prepareDraw(2, 2);
+
+    return 0;
+}
+```
+
+
+## 抽象工厂模式
+
+1. 模式的功能
+
+- 抽象工厂的功能是为一系列相关对象或相互依赖的对象创建一个接口。
+- 从某种意义上看，抽象工厂其实是一个产品系列，或者是产品簇。
+
+2. 实现成接口
+
+- AbstractFactory 实现成为接口
+
+3. 使用工厂方法
+
+- AbstractFactory定义了创建产品所需的接口，具体的实现是在实现类里面，通常在实现类里面就需要选择多种更具体的实现，所以AbstartFactory定义的创建产品的方法可以看成是工厂方法，而这些工厂方法的具体实现就延迟到了具体的工厂里面。也就是说使用工厂方法来实现抽象工厂。
+
+4. 切换产品簇
+
+- 抽象工厂定义了一个产品簇，因此切换产品簇的时候提供不同的抽象工厂就好了。

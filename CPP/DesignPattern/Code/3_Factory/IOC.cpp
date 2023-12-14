@@ -17,7 +17,7 @@ public:
     // 注册需要创建对象的构造函数，通过一个唯一的标识，以便以后查找
     template<class Drived>
     void RegisterType(std::string strKey) {
-        std::function<T* ()> function = [] {return new Drived(); }
+        std::function<T* ()> function = [] {return new Drived(); };
         RegisterType(strKey, function);
     }
 
@@ -44,3 +44,37 @@ private:
 private:
     std::map<std::string, std::function<T* ()>> m_createMap;
 };
+
+
+struct ICar
+{
+    virtual ~ICar() {}
+    virtual void test() const = 0;
+};
+
+
+struct Bus : ICar
+{
+    Bus() {}
+    void test() const { std::cout << "Bus::test()" << std::endl; }
+};
+
+struct Track : ICar
+{
+    Track() {}
+    void test() const { std::cout << "Track::test()" << std::endl; }
+};
+
+
+int main(int argc, char* argv)
+{
+    IoCContainer<ICar> carIOC;
+    carIOC.RegisterType<Bus>("bus");
+    carIOC.RegisterType<Track>("track");
+
+    std::shared_ptr<ICar> bus = carIOC.ResolveShared("bus");
+    bus->test();
+    std::shared_ptr<ICar> track = carIOC.ResolveShared("track");
+    track->test();
+    return 0;
+}
