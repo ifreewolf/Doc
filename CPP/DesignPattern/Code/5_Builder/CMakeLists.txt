@@ -4,6 +4,5 @@ project(abstractFactory)
 set(CMAKE_CXX_STANDARD 14)
 
 add_executable(noPattern no_pattern.cpp)
-add_executable(abstractFactory abstractFactory.cpp)
 
 

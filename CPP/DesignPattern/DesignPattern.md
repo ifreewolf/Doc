@@ -1059,6 +1059,8 @@ int main(int argc, char *argv[])
 }
 ```
 
+在没有使用模板的设计方法中，`pEng`需要使用两个参数`frameType`和`layoutType`来获得对应的Frame和Layout。因为在这个场景中，Frame和Layout是一一对应的，所以我们希望Frame和Layout是一个产品簇。只需要调用这个接口即可获得一组固定的产品簇。
+
 
 ## 抽象工厂模式
 
@@ -1078,3 +1080,185 @@ int main(int argc, char *argv[])
 4. 切换产品簇
 
 - 抽象工厂定义了一个产品簇，因此切换产品簇的时候提供不同的抽象工厂就好了。
+
+示例如下：
+
+```cpp
+#include <iostream>
+using namespace std;
+
+class FrameApi
+{
+public:
+    virtual void draw() = 0;
+protected:
+    FrameApi() {};
+};
+
+class LayoutApi // 分辨率的布局器
+{
+public:
+    virtual void installFrame() = 0;
+protected:
+    LayoutApi() {}
+};
+
+class ComputerFrame : public FrameApi
+{
+public:
+    ComputerFrame(int pins) : m_pins(pins) {
+
+    }
+
+    void draw() {
+        std::cout << "现在是pc机的Frame，我适用的分辨率是" << m_pins << std::endl;
+    }
+private:
+    int m_pins;
+};
+
+class MobileFrame : public FrameApi
+{
+public:
+    MobileFrame(int pins) : m_pins(pins) {
+
+    }
+
+    void draw() {
+        std::cout << "现在是Mobile的Frame，我适用的分辨率是" << m_pins << std::endl;
+    }
+private:
+    int m_pins;
+};
+
+class HighLayout : public LayoutApi
+{
+public:
+    HighLayout(int FrameAdapterPins) : m_FrameAdapterPins(FrameAdapterPins) {
+
+    }
+
+    void installFrame() {
+        std::cout << "现在是在PC环境下，我们使用的高分辨率布局" << m_FrameAdapterPins << std::endl;
+    }
+private:
+    int m_FrameAdapterPins;
+};
+
+class LowLayout : public LayoutApi
+{
+public:
+    LowLayout(int FrameAdapterPins) : m_FrameAdapterPins(FrameAdapterPins) {
+
+    }
+
+    void installFrame() {
+        std::cout << "现在是在Mobile环境下，我们使用的低分辨率布局" << m_FrameAdapterPins << std::endl;
+    }
+private:
+    int m_FrameAdapterPins;
+};
+
+class AbstractFactory
+{
+public:
+    virtual FrameApi* createFrameApi() = 0;
+    virtual LayoutApi* createLayoutApi() = 0;
+protected:
+    AbstractFactory() {}
+};
+
+class Schema1 : public AbstractFactory
+{
+public:
+    FrameApi* createFrameApi() {
+        return new ComputerFrame(1024);
+    }
+
+    LayoutApi* createLayoutApi() {
+        return new HighLayout(1024);
+    }
+};
+
+class Schema2 : public AbstractFactory
+{
+public:
+    FrameApi* createFrameApi() {
+        return new MobileFrame(800);
+    }
+    LayoutApi* createLayoutApi() {
+        return new LowLayout(800);
+    }
+};
+
+class AdvancedGuiEngineer
+{
+public:
+    void prepareMaterials(AbstractFactory* pSchema) {
+        this->pFrame = pSchema->createFrameApi();
+        this->pLayout = pSchema->createLayoutApi();
+        pFrame->draw();
+        pLayout->installFrame();
+    }
+private:
+    FrameApi* pFrame;
+    LayoutApi* pLayout;
+};
+
+// 你去肯德基，只要你是点的套餐，就一定不会不适配。
+int main(int argc, char *argv[])
+{
+    AdvancedGuiEngineer* pEng = new AdvancedGuiEngineer();
+    pEng->prepareMaterials(new Schema1);
+
+    return 0;
+}
+```
+
+如上所示，`Schema1`和`Schema2`分别对应一个产品簇，里面包含了特定的Frame和Layout，`pEng`只需要传入对应的产品簇，即可获得对应的Frame和Layout。
+
+
+### 抽象工厂模式的工程应用--控件式开发
+
+- 业务功能封装成控件
+- 微软有一个叫做asp.net的控件组，它认为对于一个Web应用来说，虽然搜索框、广告条、导航条、页面主题的设计与实现有很大的差别，但是绝大多数的Web应用的基本布局还是大致相同的。最后都可以组装成一个页面的过程也是大致相同的。
+- 这种具有同一属组的产品簇特别适合使用抽象工厂进行装配。
+
+### 抽象工厂的本质--选择产品簇的实现
+
+- 抽象工厂模式的优缺点
+- 1：分离接口和实现
+- 2：使得切换产品簇变得容易
+- 3：不太容易扩展新的产品
+- 4：容易造成类层次复杂
+
+### 抽象工厂的本质--何时选用抽象工厂模式
+
+- 1：如果希望一个系统独立于它的产品的创建，组合和表示的时候，换句话说，希望一个系统只是知道产品的接口，而不关心实现的时候；
+- 2：如果一个系统要由多个产品系列中的一个来配置的时候，换句话说，就是可以动态的切换产品簇的时候；
+- 3：如果要强调一系列相关产品的接口，以便联合使用他们的时候。
+
+---
+
+
+# 生成器/构建器模式(Builder)
+
+- 学习Builder模式
+- 一：Builder模式的介绍-定义、结构、参考实现、场景问题
+- 二：Builder模式的典型疑问与优缺点评价
+- 三：Builder模式的应用案例与思考
+
+## 场景
+
+- 考虑这样一个实际应用：银行对账单导出数据的应用，通常对于具体的导出内容和格式是有要求的：
+- 1：导出的文件，不管什么格式，都分成三个部分，分别是文件头、文件体和文件尾
+- 2：在文件头部分，需要描述如下信息：分公司编号、导出数据的日期，等等
+- 3：在文件体部分，需要描述如下信息：表名称、然后分条描述输入。
+- 4：在文件尾部分，需要描述如下信息：输出人
+
+| 账号-册序号/文书合同号 | 开户行 | 产品类型 | 币种 | 本期余额 | 账户名称 |
+| -------------------| ------ | ------ | --- | ------- | ------- |
+| 1/496****| 中国银行**支行 | 单位人民币活期基本账户存款 | 人民币 | 7,752.08 | **有限公司 |
+
+
+
